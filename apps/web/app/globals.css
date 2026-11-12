@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #07080a;
+  color: #e9ecf3;
+}
+
+body {
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(900px 420px at 12% -8%, rgba(95, 227, 192, 0.08), transparent 60%),
+    radial-gradient(800px 500px at 92% 0%, rgba(122, 162, 255, 0.07), transparent 55%);
+  background-repeat: no-repeat;
+}
+
+::selection {
+  background: rgba(95, 227, 192, 0.25);
+  color: #fff;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #252a36 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #252a36;
+  border-radius: 99px;
+}
+
+@layer components {
+  .card {
+    @apply overflow-hidden rounded-xl border border-line/80 bg-graphite/80 shadow-panel backdrop-blur-sm;
+  }
+  .card-hover {
+    @apply transition-colors hover:border-line hover:bg-slate/60;
+  }
+  .label {
+    @apply font-mono text-[10px] uppercase tracking-[0.16em] text-muted;
+  }
+  .mono {
+    @apply font-mono tabular-nums;
+  }
+  .hairline {
+    @apply border-t border-line/70;
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(37, 42, 54, 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37, 42, 54, 0.35) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  .focus-ring {
+    @apply outline-none ring-offset-2 ring-offset-ink focus-visible:ring-2 focus-visible:ring-signal/70;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-ink/60 px-3 py-2 text-sm text-text placeholder:text-muted/60 focus-ring;
+  }
+  .table-head {
+    @apply label px-3 py-2.5 text-left font-mono font-normal;
+  }
+  .table-cell {
+    @apply border-t border-line/60 px-3 py-3 text-sm;
+  }
+}
+
+.recharts-cartesian-grid line {
+  stroke: #1c212b;
+}
+.recharts-text {
+  fill: #7c8496;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+}

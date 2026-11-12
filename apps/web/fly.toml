@@ -1,0 +1,28 @@
+# Fly.io configuration for the web app. Deploy from apps/web: fly deploy
+app = "nullpoint-web"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "15s"
+  method = "GET"
+  path = "/"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
