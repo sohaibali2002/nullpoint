@@ -1,0 +1,27 @@
+{
+  "brand": "Nullpoint",
+  "tagline": "Nothing ships until it beats the null.",
+  "mode": "dark-first",
+  "color": {
+    "ink": "#07080A",
+    "graphite": "#101218",
+    "slate": "#171A22",
+    "line": "#252A36",
+    "text": "#E9ECF3",
+    "muted": "#99A1B3",
+    "signal": "#5FE3C0",
+    "beam": "#7AA2FF",
+    "warn": "#F2B34B",
+    "danger": "#FF6B6B",
+    "paper": "#F5F3EE"
+  },
+  "chartSequence": ["#5FE3C0", "#7AA2FF", "#F2B34B", "#FF6B6B", "#99A1B3", "#E9ECF3"],
+  "type": { "sans": "Inter", "mono": "JetBrains Mono" },
+  "status": {
+    "idea": "#99A1B3",
+    "backtested": "#7AA2FF",
+    "validated": "#5FE3C0",
+    "paper": "#F2B34B",
+    "live_ready": "#FF6B6B"
+  }
+}

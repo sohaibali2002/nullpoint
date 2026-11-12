@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# Node
+node_modules/
+.next/
+out/
+apps/web/.next/
+*.tsbuildinfo
+
+# Local state
+.env
+.env.local
+*.db
+*.sqlite
+*.sqlite3
+.lake/
+data/lake/
+mlruns/
+*.log
+run/
+artifacts/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

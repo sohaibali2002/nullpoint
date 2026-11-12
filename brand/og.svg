@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="Nullpoint — nothing ships until it beats the null">
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="#1A1E28" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#07080A" stop-opacity="0"/>
+      <stop offset="1" stop-color="#07080A" stop-opacity="0.92"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#07080A"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#fade)"/>
+
+  <g transform="translate(88, 84)">
+    <circle cx="24" cy="34" r="15" fill="none" stroke="#E9ECF3" stroke-width="3.2"/>
+    <circle cx="46" cy="12" r="4.6" fill="#5FE3C0"/>
+    <text x="70" y="42" font-family="Inter, sans-serif" font-size="30" font-weight="600"
+          letter-spacing="-0.7" fill="#E9ECF3">nullpoint</text>
+  </g>
+
+  <text x="88" y="290" font-family="Inter, sans-serif" font-size="76" font-weight="600"
+        letter-spacing="-2.4" fill="#E9ECF3">Nothing ships until</text>
+  <text x="88" y="376" font-family="Inter, sans-serif" font-size="76" font-weight="600"
+        letter-spacing="-2.4" fill="#5FE3C0">it beats the null.</text>
+
+  <text x="88" y="442" font-family="Inter, sans-serif" font-size="24" fill="#99A1B3">
+    Multi-agent quant research with a falsification gauntlet, not a backtest.
+  </text>
+
+  <text x="88" y="536" font-family="JetBrains Mono, monospace" font-size="18" fill="#7AA2FF">
+    10 AGENTS · WFO + CPCV + PBO + DSR · SEALED HOLDOUT · RESEARCH ONLY
+  </text>
+  <line x1="88" y1="566" x2="1112" y2="566" stroke="#252A36" stroke-width="1"/>
+  <text x="88" y="598" font-family="JetBrains Mono, monospace" font-size="16" fill="#6B7284">
+    Backtests are hypotheses. Not financial advice.
+  </text>
+</svg>
