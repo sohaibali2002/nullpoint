@@ -342,6 +342,43 @@ class AlertEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class DataAsset(Base):
+    """A cached dataset with its quality report and content hash (data lineage)."""
+
+    __tablename__ = "data_asset"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    symbol: Mapped[str] = mapped_column(String(40))
+    interval: Mapped[str] = mapped_column(String(16), default="1d")
+    start: Mapped[str] = mapped_column(String(20), default="")
+    end: Mapped[str] = mapped_column(String(20), default="")
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    path: Mapped[str] = mapped_column(String(500), default="")
+    quality: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    synthetic: Mapped[bool] = mapped_column(Boolean, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Memory(Base):
+    """Librarian memory: what worked, what failed, and why (embedded for recall)."""
+
+    __tablename__ = "memory"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    sprint_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    strategy_id: Mapped[str | None] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(24), default="lesson")  # lesson|result|note
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(JSONType, default=list)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Setting(Base):
     __tablename__ = "setting"
     __table_args__ = (UniqueConstraint("org_id", name="uq_setting_org"),)

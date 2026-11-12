@@ -73,9 +73,10 @@ class StrategySpec(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def _benchmark_in_universe_or_extra(self) -> StrategySpec:
+    def _align_rebalance(self) -> StrategySpec:
+        # Risk rules are the single source of truth for the rebalance schedule.
         if self.risk.rebalance != self.rebalance:
-            self.risk.rebalance = self.rebalance
+            self.rebalance = self.risk.rebalance
         return self
 
     def canonical(self) -> dict[str, Any]:

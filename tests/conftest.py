@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 import numpy as np
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from engine.base import MarketData
 
@@ -61,6 +63,26 @@ def make_market_data(
 ) -> MarketData:
     close = make_prices(n=n, symbols=symbols, seed=seed, drift=drift, vol=vol)
     return MarketData(close=close, benchmark=close[symbols[0]], provider="synthetic")
+
+
+@pytest.fixture()
+def db_session(tmp_path):
+    from api import models  # noqa: F401  (register metadata)
+    from api.db import Base
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'test.db'}",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
 
 
 @pytest.fixture()
