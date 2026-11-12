@@ -514,11 +514,7 @@ def get_provider(
         raise ValueError(f"unknown provider {name!r}; choose from {sorted(PROVIDER_CLASSES)}")
     cls = PROVIDER_CLASSES[key]
     kwargs: dict[str, Any] = {"client": client}
-    if key == "alphavantage":
-        kwargs["api_key"] = api_key
-    elif key == "tiingo":
-        kwargs["api_key"] = api_key
-    elif key == "polygon":
+    if key == "alphavantage" or key == "tiingo" or key == "polygon":
         kwargs["api_key"] = api_key
     elif key == "alpaca":
         kwargs["api_key"], kwargs["api_secret"] = api_key, api_secret
@@ -533,8 +529,8 @@ def provider_catalog() -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for cls in PROVIDER_CLASSES.values():
         try:
-            catalog.append(cls().meta.as_dict())
-        except Exception:  # noqa: BLE001 - a broken optional provider must not empty the catalog
+            catalog.append(cls().meta.as_dict())  # type: ignore[call-arg]
+        except Exception:
             catalog.append({"name": cls.__name__, "requires_key": True, "available": False})
     return catalog
 

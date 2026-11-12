@@ -21,9 +21,9 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -476,7 +476,7 @@ def cost_sensitivity(
         for delay in delays:
             try:
                 value = float(run(mult, delay))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 value = float("nan")
                 table.append({"cost_multiplier": mult, "delay_bars": delay, "sharpe": None, "error": str(exc)})
                 continue
@@ -639,7 +639,7 @@ class ValidationReport:
 
     def __post_init__(self) -> None:
         if not self.created_at:
-            self.created_at = datetime.now(timezone.utc).isoformat()
+            self.created_at = datetime.now(UTC).isoformat()
 
     def gate(self, name: str) -> Gate | None:
         return next((g for g in self.gates if g.name == name), None)
@@ -674,7 +674,7 @@ def validate_strategy(
     data: MarketData,
     *,
     adapter: EngineAdapter | None = None,
-    grid: dict[str, Sequence[Any]] | None = None,
+    grid: Mapping[str, Sequence[Any]] | None = None,
     trial_counter: TrialCounter | None = None,
     folds: int = 4,
     cpcv_groups: int = 4,
@@ -690,7 +690,7 @@ def validate_strategy(
         "lookback": [10, 20, 40],
         "top_n": [2, 3],
     }
-    min_trades = GATES["min_trades"] if min_trades is None else min_trades
+    min_trades = int(GATES["min_trades"]) if min_trades is None else int(min_trades)
     sections: dict[str, Any] = {}
     gates: list[Gate] = []
 
@@ -707,7 +707,7 @@ def validate_strategy(
         "failures": grid_result.failures[:5],
     }
     if best is None:
-        gates.append(_gate("insufficient_trials", False, 0, f">= 3 trades; >= 1 candidate"))
+        gates.append(_gate("insufficient_trials", False, 0, ">= 3 trades; >= 1 candidate"))
         return _finalise(spec, data, gates, sections, trial_counter)
 
     # 2. Walk-forward (rolling and anchored).
@@ -736,7 +736,11 @@ def validate_strategy(
                         "out-of-sample Sharpe across rolling folds",
                     )
                 )
-                efficiencies = [f.get("efficiency") for f in wfo.folds if f.get("efficiency") is not None]
+                efficiencies = [
+                    float(f["efficiency"])
+                    for f in wfo.folds
+                    if isinstance(f.get("efficiency"), (int, float))
+                ]
                 efficiency = float(np.median(efficiencies)) if efficiencies else 0.0
                 gates.append(
                     _gate(

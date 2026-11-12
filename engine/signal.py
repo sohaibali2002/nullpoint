@@ -66,7 +66,7 @@ def compile_signal(code: str) -> SignalFn:
         "pd": pd,
     }
     try:
-        exec(compile(tree, "<signal>", "exec"), namespace)  # noqa: S102 - scanned above
+        exec(compile(tree, "<signal>", "exec"), namespace)
     except ScanError:
         raise
     except Exception as exc:  # pragma: no cover - defensive

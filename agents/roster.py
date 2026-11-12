@@ -8,7 +8,7 @@ is not a mock pipeline, only the natural-language layer is.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -449,7 +449,7 @@ def _spec_from_template(
     version: int,
 ) -> StrategySpec:
     risk = RiskRules(**{**template.risk})
-    costs = Costs()
+    costs = Costs(commission_bps=1.0, slippage_bps=2.0, spread_bps=0.5, borrow_bps_annual=50.0)
     return make_spec(
         name=f"{template.name}",
         hypothesis=template.hypothesis,
@@ -486,4 +486,4 @@ def sprint_id_seed(sprint_id: str) -> int:
 
 
 def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

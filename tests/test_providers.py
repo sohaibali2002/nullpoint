@@ -180,7 +180,7 @@ def test_provider_cache_avoids_second_fetch(tmp_path):
         )
 
     provider = YahooProvider(client=_client(handler))
-    frame, meta, hit = lake.cached("yahoo", "SPY", "1d", lambda: provider.fetch_bars("SPY", "2020-01-01", "2020-01-10"))
+    frame, meta, hit = lake.cached("yahoo", "SPY", "1d", lambda: provider.fetch_bars("SPY", "2020-01-01", "2020-01-10"))  # noqa: RUF059
     assert hit is False
     assert calls["n"] == 1
     _, _, hit2 = lake.cached("yahoo", "SPY", "1d", lambda: provider.fetch_bars("SPY", "2020-01-01", "2020-01-10"))

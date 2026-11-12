@@ -24,7 +24,7 @@ def _clean(returns: pd.DataFrame) -> pd.DataFrame:
     return frame[usable]
 
 
-def _normalise(weights: np.ndarray, max_weight: float) -> dict[str, float]:
+def _normalise(weights: np.ndarray, max_weight: float) -> dict[int, float]:
     w = np.clip(weights, 0.0, None)
     if w.sum() <= 1e-12:
         w = np.ones_like(w)
@@ -40,7 +40,7 @@ def _normalise(weights: np.ndarray, max_weight: float) -> dict[str, float]:
         if not under.any():
             break
         w[under] += excess * w[under] / w[under].sum()
-    return {k: float(v) for k, v in zip(range(len(w)), w)}
+    return {k: float(v) for k, v in zip(range(len(w)), w, strict=False)}
 
 
 def shrink_cov(returns: pd.DataFrame, shrink: float = 0.25) -> pd.DataFrame:
@@ -102,7 +102,7 @@ def hrp_weights(returns: pd.DataFrame, max_weight: float = 0.4) -> dict[str, flo
     """Hierarchical Risk Parity (Lopez de Prado): cluster, quasi-diagonalise, bisect."""
     frame = _clean(returns)
     if frame.shape[1] < 2:
-        return {c: 1.0 for c in frame.columns}
+        return dict.fromkeys(frame.columns, 1.0)
     cov = shrink_cov(frame)
     order = _quasi_diagonal(cov)
     ordered = cov.iloc[order, order]

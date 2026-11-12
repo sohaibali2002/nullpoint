@@ -16,9 +16,10 @@ import json
 import os
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -97,7 +98,7 @@ class DataLake:
             "provider": provider,
             "symbol": symbol.upper(),
             "interval": interval,
-            "rows": int(len(out)),
+            "rows": len(out),
             "start": str(out.index[0].date()),
             "end": str(out.index[-1].date()),
             "fetched_at": pd.Timestamp.utcnow().isoformat(),
@@ -201,9 +202,11 @@ class DataLake:
         cached = self.read_bars(provider, symbol, interval)
         if cached and not force:
             frame, meta = cached
-            fetched_at = pd.Timestamp(meta.get("attrs", {}).get("fetched_at") or meta.get("fetched_at"))
+            fetched_at = pd.Timestamp(
+                str(meta.get("attrs", {}).get("fetched_at") or meta.get("fetched_at") or "")
+            )
             if pd.isna(fetched_at):  # pragma: no cover - legacy assets without a timestamp
-                fetched_at = pd.Timestamp(meta.get("start", "1970-01-01"))
+                fetched_at = pd.Timestamp(str(meta.get("start") or "1970-01-01"))
             if pd.notna(fetched_at):
                 age_hours = (pd.Timestamp.utcnow().tz_localize(None) - fetched_at.tz_localize(None)).total_seconds() / 3600
                 if age_hours <= ttl_hours:

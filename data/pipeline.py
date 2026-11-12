@@ -9,7 +9,8 @@ presented as market data: the flag travels into the API, the tearsheet and the e
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -22,7 +23,7 @@ from data.quality import check_ohlcv
 from engine.base import MarketData
 
 DEFAULT_START = "2016-01-01"
-DEFAULT_END = str(datetime.now(timezone.utc).date())
+DEFAULT_END = str(datetime.now(UTC).date())
 
 
 @dataclass
@@ -84,7 +85,7 @@ def _fetch_symbol(
                     name,
                     symbol,
                     "1d",
-                    lambda p=provider: p.fetch_bars(symbol, start, end),
+                    partial(provider.fetch_bars, symbol, start, end),
                     ttl_hours=cache_ttl_hours,
                 )
             else:
@@ -92,7 +93,7 @@ def _fetch_symbol(
             if frame is None or frame.empty:
                 raise ProviderError("empty frame")
             return frame, name
-        except Exception as exc:  # noqa: BLE001 - try the next free provider
+        except Exception as exc:
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
     raise ProviderError(f"all providers failed for {symbol}: {errors}")
 
@@ -125,7 +126,7 @@ def load_universe(
         for symbol in symbols:
             try:
                 frame, provider_name = _fetch_symbol(symbol, start, end, lake, cache_ttl_hours)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 failures.append(f"{symbol}: {exc}")
                 continue
             report = check_ohlcv(frame, symbol, provider_name)
@@ -157,14 +158,14 @@ def load_universe(
                     data=MarketData(
                         close=panel,
                         volume=volume_panel,
-                        benchmark=panel[bench_symbol] if bench_symbol in panel else None,
+                        benchmark=panel.get(bench_symbol),
                     ),
                     provider="+".join(sorted(providers)),
                     synthetic=False,
                     quality=quality,
                     warnings=warnings,
                     content_hash=MarketData(close=panel).data_hash(),
-                    fetched_at=datetime.now(timezone.utc).isoformat(),
+                    fetched_at=datetime.now(UTC).isoformat(),
                     lake_paths=lake_paths,
                 )
             failures.append(f"only {len(panel)} aligned rows, need {min_rows}")
@@ -175,7 +176,7 @@ def load_universe(
         {
             "symbol": symbols[0],
             "provider": "synthetic",
-            "rows": int(len(panel)),
+            "rows": len(panel),
             "start": str(panel.index[0].date()),
             "end": str(panel.index[-1].date()),
             "status": "warn",
@@ -193,8 +194,11 @@ def load_universe(
         provider="synthetic",
         synthetic=True,
         quality=quality,
-        warnings=warnings + ["SYNTHETIC DATA: results are for pipeline verification only, not market evidence."],
+        warnings=[
+            *warnings,
+            "SYNTHETIC DATA: results are for pipeline verification only, not market evidence.",
+        ],
         content_hash=MarketData(close=panel).data_hash(),
-        fetched_at=datetime.now(timezone.utc).isoformat(),
+        fetched_at=datetime.now(UTC).isoformat(),
         lake_paths=[],
     )

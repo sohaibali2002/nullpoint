@@ -112,7 +112,7 @@ def test_lake_cache_hits_and_expires(tmp_path):
         return _bars()
 
     lake.cached("test", "QQQ", "1d", fetcher, ttl_hours=24)
-    frame, meta, hit = lake.cached("test", "QQQ", "1d", fetcher, ttl_hours=24)
+    frame, meta, hit = lake.cached("test", "QQQ", "1d", fetcher, ttl_hours=24)  # noqa: RUF059
     assert hit is True
     assert calls["n"] == 1
     assert len(frame) == 120

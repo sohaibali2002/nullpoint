@@ -9,14 +9,13 @@ from engine.portfolio import (
     hrp_weights,
     inverse_vol_weights,
     kelly_cap,
-    mean_variance_weights,
     portfolio_metrics,
     risk_parity_weights,
     shrink_cov,
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def returns() -> pd.DataFrame:
     rng = np.random.default_rng(5)
     index = pd.bdate_range("2020-01-01", periods=500)

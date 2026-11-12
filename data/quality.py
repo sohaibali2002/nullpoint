@@ -107,7 +107,10 @@ def _split_candidates(close: pd.Series) -> list[str]:
         ratio = 1.0 + ret
         for split in COMMON_SPLIT_RATIOS:
             if abs(ratio - split) / split < 0.03 or abs(ratio - 1.0 / split) * split < 0.03:
-                hits.append(f"possible unadjusted {split:g}:1 split on {ts.date()} (return {ret:+.1%})")
+                hits.append(
+                    f"possible unadjusted {split:g}:1 split on {pd.Timestamp(str(ts)).date()} "
+                    f"(return {float(ret):+.1%})"
+                )
                 break
     return hits[:5]
 
@@ -183,15 +186,13 @@ def check_ohlcv(
         sigma = float(rets.std(ddof=1))
         if sigma > 0:
             outliers = rets[abs((rets - rets.mean()) / sigma) > outlier_sigma]
-            report.checks["outlier_count"] = int(len(outliers))
+            report.checks["outlier_count"] = len(outliers)
             report.checks["max_abs_return"] = float(rets.abs().max())
             if len(outliers):
                 dates = ", ".join(str(d.date()) for d in outliers.index[:4])
                 report.warnings.append(f"{len(outliers)} returns beyond {outlier_sigma:g} sigma ({dates})")
         splits = _split_candidates(df["close"])
-        if splits and expect_adjusted:
-            report.warnings.extend(splits)
-        elif splits:
+        if (splits and expect_adjusted) or splits:
             report.warnings.extend(splits)
 
     if "adj_close" in df.columns:

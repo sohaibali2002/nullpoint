@@ -14,13 +14,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
-from agents.bus import BudgetGuard, MessageBus
-from agents.embeddings import embed, is_duplicate
-from agents.llm import LLMClient, build_llm
-from agents.tearsheet import render_tearsheet
 from api.config import Settings
 from api.models import (
     DataAsset,
@@ -30,6 +23,13 @@ from api.models import (
     TrialCounter,
     new_id,
 )
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from agents.bus import BudgetGuard, MessageBus
+from agents.embeddings import embed, is_duplicate
+from agents.llm import LLMClient, build_llm
+from agents.tearsheet import render_tearsheet
 from data.lake import DataLake
 from data.pipeline import Dataset, load_universe
 from engine.base import BacktestResult, EngineAdapter, GridResult, get_adapter
@@ -402,7 +402,7 @@ def _safe_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         elif hasattr(value, "model_dump"):
             safe[key] = f"<{type(value).__name__}>"
         elif hasattr(value, "symbols"):
-            safe[key] = getattr(value, "symbols")
+            safe[key] = value.symbols
         elif hasattr(value, "metadata") and isinstance(value.metadata, dict):
             safe[key] = value.metadata
         else:

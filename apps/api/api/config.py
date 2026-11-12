@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     lake_root: Path = Path("./.lake")
     data_cache_ttl_hours: int = 24
     data_read_only: bool = True
+    allow_network: bool = True
 
     # Agents / LLM
     anthropic_api_key: SecretStr | None = None
@@ -49,6 +50,8 @@ class Settings(BaseSettings):
     sprint_wall_clock_minutes: int = 45
     max_agent_iterations: int = 3
     max_strategies_per_sprint: int = 6
+    job_runner: Literal["auto", "arq", "subprocess", "sync"] = "auto"
+    artifacts_dir: Path = Path("artifacts")
 
     # Data providers (all free tiers)
     yfinance_enabled: bool = True

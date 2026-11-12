@@ -86,6 +86,7 @@ warn_redundant_casts = true
 disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
 exclude = ["apps/web", "scripts/demo_sprint.py"]
 
 [[tool.mypy.overrides]]
@@ -105,7 +106,12 @@ filterwarnings = ["ignore::DeprecationWarning"]
 [tool.coverage.run]
 source = ["engine", "data", "agents", "sandbox", "api"]
 branch = true
-omit = ["*/__init__.py"]
+omit = [
+  "*/__init__.py",
+  # Optional third-party engines: exercised only when the extra is installed.
+  "engine/vectorbt_adapter.py",
+  "engine/backtesting_adapter.py",
+]
 
 [tool.coverage.report]
 show_missing = true

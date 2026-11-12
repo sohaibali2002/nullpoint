@@ -10,13 +10,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
+from api.models import AgentMessage, LLMUsage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-
-from api.models import AgentMessage, LLMUsage
 
 
 class BudgetExceeded(RuntimeError):
@@ -186,7 +185,7 @@ class MessageBus:
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "cost_usd": cost_usd,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         if self.sink:
             self.sink(payload)
@@ -195,7 +194,7 @@ class MessageBus:
             agent=agent,
             role=role,
             content=message.content,
-            created_at=payload["created_at"],
+            created_at=str(payload["created_at"]),
         )
 
     def tool(self, agent: str, tool_name: str, payload: dict[str, Any], result: Any) -> Emitted:
@@ -269,7 +268,7 @@ def _json_safe(value: Any, depth: int = 0) -> Any:
     if hasattr(value, "model_dump"):
         try:
             return _json_safe(value.model_dump(mode="json"), depth + 1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     metadata = getattr(value, "metadata", None)
     if isinstance(metadata, dict):

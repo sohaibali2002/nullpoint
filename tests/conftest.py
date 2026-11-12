@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -65,7 +65,7 @@ def make_market_data(
     return MarketData(close=close, benchmark=close[symbols[0]], provider="synthetic")
 
 
-@pytest.fixture()
+@pytest.fixture
 def db_session(tmp_path):
     from api import models  # noqa: F401  (register metadata)
     from api.db import Base
@@ -85,12 +85,12 @@ def db_session(tmp_path):
         engine.dispose()
 
 
-@pytest.fixture()
+@pytest.fixture
 def noise_data() -> MarketData:
     return make_market_data(n=700, seed=3, drift=0.0)
 
 
-@pytest.fixture()
+@pytest.fixture
 def trending_data() -> MarketData:
     close = make_trending_prices()
     return MarketData(close=close, benchmark=None, provider="synthetic")

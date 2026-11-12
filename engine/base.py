@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -61,7 +61,7 @@ class MarketData:
 
     @property
     def index(self) -> pd.DatetimeIndex:
-        return self.close.index
+        return pd.DatetimeIndex(self.close.index)
 
     def slice(self, start: int = 0, end: int | None = None) -> MarketData:
         end = len(self.close) if end is None else end
@@ -224,7 +224,7 @@ class WalkForwardReport:
         }
 
 
-def expand_grid(grid: dict[str, Iterable[Any]]) -> list[dict[str, Any]]:
+def expand_grid(grid: Mapping[str, Iterable[Any]]) -> list[dict[str, Any]]:
     if not grid:
         return [{}]
     keys = sorted(grid)
@@ -267,7 +267,7 @@ class EngineAdapter(ABC):
     def run_grid(
         self,
         spec: StrategySpec,
-        grid: dict[str, Iterable[Any]],
+        grid: Mapping[str, Iterable[Any]],
         data: MarketData,
         *,
         objective: str = "sharpe",
@@ -291,7 +291,7 @@ class EngineAdapter(ABC):
                     trial_counter=trial_counter,
                     cost_multiplier=cost_multiplier,
                 )
-            except Exception as exc:  # noqa: BLE001 - a bad grid point must not kill the search
+            except Exception as exc:
                 failures.append({"params": combo, "error": str(exc)})
                 # A failed attempt is still a trial: multiple-testing accounting must include it.
                 if trial_counter is not None:
@@ -314,7 +314,7 @@ class EngineAdapter(ABC):
     def run_walk_forward(
         self,
         spec: StrategySpec,
-        param_grid: dict[str, Iterable[Any]],
+        param_grid: Mapping[str, Iterable[Any]],
         data: MarketData,
         *,
         folds: int = 5,
@@ -478,7 +478,7 @@ def list_adapters() -> dict[str, dict[str, Any]]:
         import vectorbt  # noqa: F401
 
         availability["vectorbt"] = {"available": True, "note": "primary engine"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         availability["vectorbt"] = {
             "available": False,
             "note": f"install with `uv pip install -e '.[vbt]'` ({type(exc).__name__})",
@@ -487,7 +487,7 @@ def list_adapters() -> dict[str, dict[str, Any]]:
         import backtesting  # noqa: F401
 
         availability["backtesting"] = {"available": True, "note": "second adapter (pluggability)"}
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         availability["backtesting"] = {
             "available": False,
             "note": f"install with `uv pip install -e '.[bta]'` ({type(exc).__name__})",

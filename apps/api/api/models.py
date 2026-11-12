@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -41,10 +41,10 @@ def new_id() -> str:
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-class StrategyStatus(str, enum.Enum):
+class StrategyStatus(enum.StrEnum):
     """The only permitted status ladder. Live trading is intentionally absent."""
 
     IDEA = "idea"

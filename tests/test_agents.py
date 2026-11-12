@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from api.config import Settings
+from api.models import AgentMessage, Idea, Organization, Sprint, Strategy, TrialCounter, User
 from sqlalchemy import select
 
 from agents import DBTrialCounter, SprintRunner, roster_payload
 from agents.bus import BudgetExceeded, BudgetGuard, MessageBus
 from agents.embeddings import cosine, embed, is_duplicate
-from agents.templates import TEMPLATES, get_template
-from api.config import Settings
-from api.models import AgentMessage, Idea, Organization, Sprint, Strategy, TrialCounter, User
+from agents.templates import TEMPLATES
 from engine.base import MarketData
 from engine.strategy import StrategySpec
 from engine.validation import future_canary
@@ -175,7 +175,7 @@ def test_sprint_runs_end_to_end_and_never_promotes_to_paper(db_session, tmp_path
 
 
 def test_sprint_respects_kill_switch(db_session, tmp_path):
-    org, sprint = _seed_org(db_session)
+    _org, sprint = _seed_org(db_session)
     sprint.kill_requested = True
     db_session.commit()
     runner = SprintRunner(db_session, sprint.id, settings=_settings(tmp_path), allow_network=False)
@@ -185,7 +185,7 @@ def test_sprint_respects_kill_switch(db_session, tmp_path):
 
 
 def test_sprint_is_idempotent_once_completed(db_session, tmp_path):
-    org, sprint = _seed_org(db_session)
+    _org, sprint = _seed_org(db_session)
     sprint.status = "completed"
     sprint.result = {"status": "completed", "marker": 1}
     db_session.commit()

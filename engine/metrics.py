@@ -8,7 +8,7 @@ single NaN propagates into ranks and PBO.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -165,12 +165,12 @@ def tail_ratio(returns: pd.Series) -> float:
 
 def skewness(returns: pd.Series) -> float:
     series = _clean(returns)
-    return float(series.skew()) if len(series) > 2 and series.std(ddof=1) > 0 else 0.0
+    return float(cast(float, series.skew())) if len(series) > 2 and series.std(ddof=1) > 0 else 0.0
 
 
 def kurtosis(returns: pd.Series) -> float:
     series = _clean(returns)
-    return float(series.kurtosis()) if len(series) > 3 and series.std(ddof=1) > 0 else 0.0
+    return float(cast(float, series.kurtosis())) if len(series) > 3 and series.std(ddof=1) > 0 else 0.0
 
 
 def var_cvar(returns: pd.Series, level: float = 0.05) -> tuple[float, float]:
@@ -225,7 +225,7 @@ def factor_attribution(
             **{name: float(coef[i + 1] / se[i + 1]) for i, name in enumerate(names)},
         },
         "r2": float(r2),
-        "n_obs": int(len(frame)),
+        "n_obs": len(frame),
     }
 
 
@@ -250,7 +250,7 @@ def compute_metrics(
         "calmar": calmar_ratio(equity, periods_per_year),
         "max_drawdown": max_drawdown(equity),
         "max_drawdown_duration": drawdown_duration(equity),
-        "n_periods": int(len(rets)),
+        "n_periods": len(rets),
         "n_trades": len(pnls),
         "profit_factor": profit_factor(pnls),
         "win_rate": win_rate(pnls),

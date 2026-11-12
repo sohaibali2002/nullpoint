@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -137,7 +137,7 @@ def equity_svg(equity: pd.Series, width: int = 880, height: int = 220) -> str:
         f"<line x1='0' y1='{baseline:.1f}' x2='{width}' y2='{baseline:.1f}' stroke='{PALETTE['line']}' stroke-width='1'/>"
         f"<polyline fill='none' stroke='{PALETTE['signal']}' stroke-width='2' points='{points}'/>"
         f"<text x='{width - 8}' y='18' text-anchor='end' fill='{PALETTE['muted']}' font-size='11' "
-        f"font-family='JetBrains Mono, monospace'>{low:.2f} – {high:.2f}</text></svg>"
+        f"font-family='JetBrains Mono, monospace'>{low:.2f} - {high:.2f}</text></svg>"
     )
 
 
@@ -192,7 +192,7 @@ def render_tearsheet(
         data_hash=html.escape(str(dataset_meta.get("content_hash", ""))),
         universe=", ".join(spec.universe),
         code=html.escape(spec.signal_code),
-        created_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        created_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         ink=PALETTE["ink"],
         graphite=PALETTE["graphite"],
         line=PALETTE["line"],

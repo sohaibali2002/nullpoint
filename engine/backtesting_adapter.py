@@ -26,7 +26,7 @@ class BacktestingPyAdapter(EngineAdapter):
     def __init__(self) -> None:
         try:
             import backtesting  # noqa: F401
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise EngineUnavailable(
                 "backtesting.py is not installed. Install the second adapter with: "
                 "`uv pip install -e '.[bta]'`."
@@ -42,7 +42,8 @@ class BacktestingPyAdapter(EngineAdapter):
         cost_multiplier: float = 1.0,
         delay_bars: int = 1,
     ) -> BacktestResult:
-        from backtesting import Backtest, Strategy as BtStrategy
+        from backtesting import Backtest
+        from backtesting import Strategy as BtStrategy
 
         if len(spec.universe) != 1:
             raise ValueError("backtesting.py adapter supports exactly one symbol per run")

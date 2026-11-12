@@ -95,9 +95,10 @@ def normalize_bars(
             df = df.set_index("date")
         else:
             raise ProviderError(f"{provider}: response for {symbol} has no datetime index")
-    if df.index.tz is not None:
-        df.index = df.index.tz_convert(None)
-    df.index = pd.DatetimeIndex(df.index).normalize()
+    index = pd.DatetimeIndex(df.index)
+    if index.tz is not None:
+        index = index.tz_convert(None)
+    df.index = index.normalize()
     df.index.name = "date"
     df = df[~df.index.duplicated(keep="last")].sort_index()
 
@@ -123,7 +124,7 @@ def normalize_bars(
             "availability_lag_days": available_at_lag_days,
         }
     )
-    df["available_at"] = df.index + pd.Timedelta(days=available_at_lag_days)
+    df["available_at"] = pd.DatetimeIndex(df.index) + pd.Timedelta(days=available_at_lag_days)
     return df
 
 

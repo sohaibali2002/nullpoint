@@ -9,14 +9,28 @@ The runner owns the state machine and the safety gates:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import traceback
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-import numpy as np
 import pandas as pd
+from api.config import Settings
+from api.config import settings as default_settings
+from api.models import (
+    ALLOWED_TRANSITIONS,
+    Experiment,
+    Portfolio,
+    Sprint,
+    Strategy,
+    StrategyStatus,
+    utcnow,
+)
+from api.models import (
+    ValidationReport as ValidationReportRow,
+)
 from sqlalchemy.orm import Session
 
 from agents.bus import BudgetExceeded, BudgetGuard, MessageBus
@@ -33,21 +47,11 @@ from agents.roster import (
     SkepticAgent,
     StrategyCoderAgent,
 )
-from agents.tools import ToolContext
-from api.config import Settings, settings as default_settings
-from api.models import (
-    ALLOWED_TRANSITIONS,
-    Experiment,
-    Portfolio,
-    Sprint,
-    Strategy,
-    StrategyStatus,
-    ValidationReport as ValidationReportRow,
-    utcnow,
-)
-from engine.base import BacktestResult, EngineAdapter
-from engine.validation import ValidationReport as EngineValidationReport, sealed_holdout_split
 from agents.templates import get_template
+from agents.tools import ToolContext
+from engine.base import BacktestResult, EngineAdapter
+from engine.validation import ValidationReport as EngineValidationReport
+from engine.validation import sealed_holdout_split
 from sandbox.scanner import ScanError
 
 DISCLAIMER = "Research only. Not investment advice. Backtests are hypotheses, not forecasts."
@@ -83,10 +87,8 @@ class SprintRunner:
     def _alert(self, event: str, subject: str, body: str) -> None:
         if self.alert is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             self.alert(event, subject, body)
-        except Exception:  # noqa: BLE001 - alerts must never break a sprint
-            pass
 
     # -------------------------------------------------------------------- run
     def run(self) -> dict[str, Any]:
@@ -158,7 +160,7 @@ class SprintRunner:
             config = sprint.config or {}
             universe = list(sprint.universe or []) or ["SPY", "QQQ", "XLK", "XLF", "XLE", "XLV"]
             start = str(config.get("start") or "2016-01-01")
-            end = str(config.get("end") or datetime.now(timezone.utc).date())
+            end = str(config.get("end") or datetime.now(UTC).date())
             max_strategies = int(config.get("max_strategies") or self.settings.max_strategies_per_sprint)
 
             plan = plan_agent.plan(sprint.objective, universe, max_strategies)
@@ -202,7 +204,7 @@ class SprintRunner:
                 tool_payload={"proposals": proposals},
             )
 
-            for proposal_index, proposal in enumerate(proposals):
+            for proposal in proposals:
                 budget.check()
                 idea_record = ctx.invoke(ideator.spec, "record_idea",
                                          title=proposal["title"],
@@ -450,7 +452,7 @@ class SprintRunner:
             self.session.commit()
             return sprint.result
 
-        except Exception as exc:  # noqa: BLE001 - surface failures without losing the audit trail
+        except Exception as exc:
             self.session.rollback()
             error = f"{type(exc).__name__}: {exc}"
             bus.emit(
@@ -569,4 +571,4 @@ def spec_fingerprint(spec: Any) -> str:
     return hashlib.sha256(str(spec).encode()).hexdigest()[:16]
 
 
-__all__ = ["SprintRunner", "run_sprint", "AGENT_SPECS"]
+__all__ = ["AGENT_SPECS", "SprintRunner", "run_sprint"]

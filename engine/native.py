@@ -13,7 +13,7 @@ Semantics (shared by every adapter where the vendor engine allows it):
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -26,7 +26,7 @@ from engine.base import (
 )
 from engine.features import build_features
 from engine.metrics import Trade, compute_metrics
-from engine.signal import SignalFn, SignalError, compile_signal, evaluate_signal
+from engine.signal import SignalError, SignalFn, compile_signal, evaluate_signal
 from engine.strategy import StrategySpec
 
 
@@ -143,6 +143,7 @@ class NativeAdapter(EngineAdapter):
             prices = close[symbol].to_numpy(dtype=float)
             current = 0.0
             entry = np.nan
+            col = cast(int, out.columns.get_loc(symbol))
             for i in range(len(out)):
                 wanted = sym_pos[i]
                 if current != 0.0 and np.isfinite(entry):
@@ -150,7 +151,7 @@ class NativeAdapter(EngineAdapter):
                     if np.isfinite(signed) and (
                         (stop is not None and signed <= -stop) or (take is not None and signed >= take)
                     ):
-                        out.iat[i, out.columns.get_loc(symbol)] = 0.0
+                        out.iat[i, col] = 0.0
                         current = 0.0
                         entry = np.nan
                         continue
@@ -160,7 +161,7 @@ class NativeAdapter(EngineAdapter):
                 elif current == 0.0 or np.sign(wanted) != np.sign(current):
                     current = float(wanted)
                     entry = float(prices[i])
-                out.iat[i, out.columns.get_loc(symbol)] = current
+                out.iat[i, col] = current
         return out
 
     @staticmethod
@@ -168,10 +169,15 @@ class NativeAdapter(EngineAdapter):
         if spec.rebalance == "daily" or positions.empty:
             return positions
         freq = "W" if spec.rebalance == "weekly" else "M"
-        periods = positions.index.to_period(freq)
+        periods = pd.DatetimeIndex(positions.index).to_period(freq)
         starts = np.ones(len(periods), dtype=bool)
         starts[1:] = periods[1:] != periods[:-1]
-        return positions.where(starts, np.nan).ffill().fillna(0.0)
+        mask = pd.DataFrame(
+            np.repeat(starts[:, None], positions.shape[1], axis=1),
+            index=positions.index,
+            columns=positions.columns,
+        )
+        return positions.where(mask, np.nan).ffill().fillna(0.0)
 
     @staticmethod
     def _size(close: pd.DataFrame, positions: pd.DataFrame, spec: StrategySpec) -> pd.DataFrame:
@@ -247,9 +253,9 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
         return trades
     rets = close.pct_change(fill_method=None).fillna(0.0)
     for symbol in positions.columns:
-        pos = positions[symbol].to_numpy(dtype=float)
-        prices = close[symbol].to_numpy(dtype=float)
-        dates = positions.index
+        pos = np.asarray(positions[symbol].to_numpy(), dtype=float)
+        price_series = np.asarray(close[symbol].to_numpy(), dtype=float).reshape(-1)
+        dates = pd.DatetimeIndex(positions.index)
         current = 0.0
         entry_i: int | None = None
         for i, wanted in enumerate(pos):
@@ -259,15 +265,15 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
             elif current != 0.0 and (wanted == 0.0 or np.sign(wanted) != np.sign(current)):
                 assert entry_i is not None
                 segment = rets[symbol].iloc[entry_i + 1 : i + 1]
-                growth = float((1.0 + current * segment).prod()) if len(segment) else 1.0
+                growth = float(cast(float, (1.0 + current * segment).prod())) if len(segment) else 1.0
                 trades.append(
                     Trade(
                         symbol=symbol,
                         direction=int(np.sign(current)),
                         entry_date=str(dates[entry_i].date()),
                         exit_date=str(dates[i].date()),
-                        entry_price=float(prices[entry_i]),
-                        exit_price=float(prices[i]),
+                        entry_price=float(price_series[entry_i]),
+                        exit_price=float(price_series[i]),
                         pnl=growth - 1.0,
                         bars=i - entry_i,
                     )
@@ -276,15 +282,15 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
                 entry_i = i if wanted != 0.0 else None
         if current != 0.0 and entry_i is not None:
             segment = rets[symbol].iloc[entry_i + 1 :]
-            growth = float((1.0 + current * segment).prod()) if len(segment) else 1.0
+            growth = float(cast(float, (1.0 + current * segment).prod())) if len(segment) else 1.0
             trades.append(
                 Trade(
                     symbol=symbol,
                     direction=int(np.sign(current)),
                     entry_date=str(dates[entry_i].date()),
                     exit_date=str(dates[-1].date()),
-                    entry_price=float(prices[entry_i]),
-                    exit_price=float(prices[-1]),
+                    entry_price=float(price_series[entry_i]),
+                    exit_price=float(price_series[-1]),
                     pnl=growth - 1.0,
                     bars=len(pos) - 1 - entry_i,
                 )

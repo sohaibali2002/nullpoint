@@ -26,8 +26,8 @@ class VectorbtAdapter(EngineAdapter):
 
     def __init__(self) -> None:
         try:
-            import vectorbt as vbt  # noqa: F401
-        except Exception as exc:  # noqa: BLE001
+            import vectorbt as vbt
+        except Exception as exc:
             raise EngineUnavailable(
                 "vectorbt is not installed. Install the primary engine with: "
                 "`uv pip install -e '.[vbt]'` (requires numba)."

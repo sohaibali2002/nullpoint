@@ -136,7 +136,7 @@ class LocalSubprocessSandbox:
                 "HOME": str(work),
             }
             try:
-                proc = subprocess.run(  # noqa: S603 - fixed argv, scanned code
+                proc = subprocess.run(
                     cmd,
                     cwd=work,
                     env=env,
@@ -153,8 +153,11 @@ class LocalSubprocessSandbox:
             except subprocess.TimeoutExpired as exc:
                 timed_out = True
                 exit_code = None
-                stdout = exc.stdout or ""
-                stderr = (exc.stderr or "") + "\nwall-clock limit exceeded"
+                raw_out = exc.stdout or ""
+                raw_err = exc.stderr or ""
+                stdout = raw_out.decode("utf-8", "replace") if isinstance(raw_out, bytes) else raw_out
+                decoded_err = raw_err.decode("utf-8", "replace") if isinstance(raw_err, bytes) else raw_err
+                stderr = decoded_err + "\nwall-clock limit exceeded"
             duration_ms = int((time.perf_counter() - started) * 1000)
             output = None
             out_file = work / "output.json"
@@ -247,7 +250,7 @@ class DockerSandbox:
                 cmd += ["-v", f"{Path(data_dir).resolve()}:/data:ro"]
             cmd += [self.image, "python", "-I", "/work/main.py"]
             try:
-                proc = subprocess.run(  # noqa: S603
+                proc = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
@@ -260,8 +263,11 @@ class DockerSandbox:
             except subprocess.TimeoutExpired as exc:
                 timed_out = True
                 exit_code = None
-                stdout = exc.stdout or ""
-                stderr = (exc.stderr or "") + "\ncontainer wall-clock limit exceeded"
+                raw_out = exc.stdout or ""
+                raw_err = exc.stderr or ""
+                stdout = raw_out.decode("utf-8", "replace") if isinstance(raw_out, bytes) else raw_out
+                decoded_err = raw_err.decode("utf-8", "replace") if isinstance(raw_err, bytes) else raw_err
+                stderr = decoded_err + "\ncontainer wall-clock limit exceeded"
             duration_ms = int((time.perf_counter() - started) * 1000)
             output = None
             out_file = work / "output.json"
