@@ -134,6 +134,12 @@ class LocalSubprocessSandbox:
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "MPLBACKEND": "Agg",
                 "HOME": str(work),
+                # Numerical libraries must not spawn a thread pool: the process limit is tight and
+                # oversubscription stalls otherwise deterministic backtests.
+                "OPENBLAS_NUM_THREADS": "1",
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
             }
             try:
                 proc = subprocess.run(
@@ -248,6 +254,8 @@ class DockerSandbox:
             ]  # fmt: skip
             if data_dir is not None:
                 cmd += ["-v", f"{Path(data_dir).resolve()}:/data:ro"]
+            for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+                cmd += ["-e", f"{key}=1"]
             cmd += [self.image, "python", "-I", "/work/main.py"]
             try:
                 proc = subprocess.run(

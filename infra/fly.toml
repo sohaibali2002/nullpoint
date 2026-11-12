@@ -1,0 +1,46 @@
+# Fly.io configuration for the API and worker (same image, two process groups).
+# Deploy from the repository root: fly deploy --config infra/fly.toml
+app = "nullpoint-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  LAKE_ROOT = "/lake"
+  SANDBOX_BACKEND = "docker"
+  JOB_RUNNER = "arq"
+  ALLOW_NETWORK = "true"
+
+[processes]
+  api = "uvicorn api.main:app --host 0.0.0.0 --port 8000"
+  worker = "arq api.jobs.WorkerSettings"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["api"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+[mounts]
+  source = "lake"
+  destination = "/lake"
