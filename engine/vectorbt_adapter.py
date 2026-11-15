@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from engine.base import BacktestResult, EngineAdapter, EngineUnavailable, MarketData, TrialCounter
@@ -64,7 +63,10 @@ class VectorbtAdapter(EngineAdapter):
         slippage = spec.costs.slippage_bps * cost_multiplier / 10_000.0
         portfolio = vbt.Portfolio.from_orders(
             close=close,
-            size=positions.diff().fillna(positions),
+            # ``targetpercent`` expects the target weight, not its first difference.  Passing
+            # the diff makes every rebalance order a fraction of the *change* and silently
+            # under-trades the strategy.
+            size=positions.fillna(0.0),
             size_type="targetpercent",
             direction="both",
             fees=fee,
@@ -94,11 +96,11 @@ class VectorbtAdapter(EngineAdapter):
             equity=equity,
             positions=positions,
             benchmark_returns=bench_ret if bench_ret is not None else pd.Series(dtype=float),
-            gross_returns=(positions * close.pct_change(fill_method=None).fillna(0.0)).sum(axis=1),
+            gross_returns=(positions.shift(1) * close.pct_change(fill_method=None).fillna(0.0)).sum(axis=1),
             costs=costs,
             trades=extract_trades(positions, close),
             metrics=metrics,
         )
 
 
-__all__ = ["VectorbtAdapter", "np"]
+__all__ = ["VectorbtAdapter"]

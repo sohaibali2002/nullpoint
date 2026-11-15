@@ -12,13 +12,18 @@ API, worker and database.
 - [ ] `LLM_PROVIDER` and the matching key are set (or `mock` for a demo deployment).
 - [ ] `CORS_ORIGINS` contains only the real web origin.
 - [ ] `SANDBOX_BACKEND=docker` on the worker host, with Docker available.
+- [ ] `AUTO_CREATE_SCHEMA=false`; the release command or manual step runs `alembic upgrade head`.
+- [ ] `ENGINE_SANDBOX=true` and the worker can reach a Docker daemon.
+- [ ] `nullpoint-sandbox:latest` is built from `sandbox/Dockerfile` on the worker host (or pulled
+      from a registry); the backtest fails closed if the image is missing.
 - [ ] Object storage or a persistent volume is mounted at `LAKE_ROOT`; the lake is not ephemeral.
 - [ ] Secrets live in the platform secret store, never in the image or repository.
 - [ ] `KILL_SWITCH` behaviour and on-call ownership are documented.
 
 ## 1. Fly.io
 
-API + worker (`infra/fly.toml`), one image, two process groups:
+API + worker (`infra/fly.toml`), one image, two process groups. Staging uses
+`infra/fly.staging.toml` with its own app, database, Redis and lake volume:
 
 ```bash
 fly launch --no-deploy --config infra/fly.toml --name nullpoint-api
@@ -43,6 +48,10 @@ fly deploy
 Set `NEXT_PUBLIC_API_URL` only if the browser must call the API directly; the default `/api` rewrite is
 same-origin and preferred.
 
+> **Sandbox host requirement.** Standard Fly Machines do not expose a Docker daemon. Run the worker
+> on a host/VM with Docker access, or provide a verified Docker-in-Docker sidecar, before enabling
+> `ENGINE_SANDBOX=true`. The worker fails closed if it cannot reach Docker.
+
 ## 2. Railway
 
 - Create Postgres and Redis plugins.
@@ -53,15 +62,30 @@ same-origin and preferred.
 - Add a persistent volume for `/lake`.
 - Reference: `infra/railway.api.json` (adapt service names to your project).
 
-## 3. Database
+## 3. Database migrations
 
-The app calls `init_db()` on startup (idempotent `create_all`). For controlled migrations, run:
+Production and staging are migration-owned: `AUTO_CREATE_SCHEMA=false`, and the Fly release command
+runs `alembic upgrade head` before the new machines serve traffic. Apply migrations manually only when
+the platform has no release command:
 
 ```bash
-python -c "from api.db import init_db; init_db()"
+alembic upgrade head
+# fail the deploy if the models have drifted from the migrations
+alembic check
 ```
 
-Alembic is not wired yet; introduce it before schema changes that need rollbacks.
+Create a migration after a model change with `make migrate-create m="describe change"`; review the
+generated file before committing it. Never edit an already-applied revision.
+
+A development database created before Alembic can be adopted without losing data:
+
+```bash
+alembic stamp 9697d791d47d   # mark the pre-Alembic baseline
+alembic upgrade head         # apply the bridge revision (idempotent)
+alembic check                # verify no drift
+```
+
+The bridge only adds missing objects; it never drops a table or column.
 
 ## 4. Post-deploy verification
 

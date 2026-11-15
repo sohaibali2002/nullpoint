@@ -17,6 +17,7 @@ from api.deps import can_write, get_principal
 from api.models import Experiment, Strategy, StrategyStatus, ValidationReport
 from api.schemas import ApproveIn
 from api.security import Principal
+from api.services import governance
 from api.services import status as status_service
 from api.services.serializers import (
     DISCLAIMER,
@@ -129,8 +130,21 @@ def get_strategy(
         "experiments": [experiment_dict(e) for e in experiments],
         "lineage": lineage,
         "approvals": status_service.approvals_for(db, principal.org_id, strategy.id),
+        "holdout": governance.holdout_dict(governance.holdout_for(db, strategy)),
+        "claim": governance.claim_status(db, strategy),
         "data_policy": "visible sample only; sealed holdout requires a human-triggered final check",
     }
+
+
+@router.get("/strategies/{strategy_id}/claim")
+def get_performance_claim(
+    strategy_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """The final gate. Headline metrics are withheld until validation, holdout and paper pass."""
+    strategy = _get(db, principal.org_id, strategy_id)
+    return governance.claim_status(db, strategy)
 
 
 @router.get("/strategies/{strategy_id}/validation")

@@ -20,6 +20,8 @@ Research software only. Not investment advice, not a signal service, not a broke
   CPCV, PBO/CSCV, deflated Sharpe against a global trial counter, Monte Carlo trade/block bootstrap,
   random-entry and signal-shuffle nulls, cost 2×/3× stress, execution delay, regime coverage and a
   sealed holdout.
+- **True optimization.** Exhaustive pre-registered grids for PBO/plateau, plus TRIBES (adaptive,
+  parameter-free particle swarm) re-fitted on every walk-forward train window with warm-up history.
 - **Cost-aware engine.** Native NumPy/pandas reference implementation with next-bar fills, commission,
   spread, slippage, borrow, stops, position caps and vol targeting. `vectorbt` and `backtesting.py`
   adapters are optional extras.
@@ -99,18 +101,26 @@ tests/             engine, validation, noise gate, data, agents, API
 
 Configured in `engine/validation.py` (`GATES`) and applied to every candidate:
 
-| Gate | Threshold |
-|---|---|
-| Deflated Sharpe (vs global trials) | ≥ 0.90 |
-| PBO / CSCV | ≤ 0.35 |
-| Walk-forward OOS Sharpe | ≥ 0.50 |
-| WFO efficiency (OOS/IS) | ≥ 0.50 |
-| Sharpe at 3× costs | ≥ 0.30 |
-| Sharpe with 1-bar delay | ≥ 0.30 |
-| Monte Carlo p-value | < 0.05 |
-| Regime coverage | ≥ 3 regimes |
-| Minimum track record | ≥ 8 years and ≥ 100 trades |
-| Sealed holdout | untouched until final review |
+<!-- gates:start -->
+| Gate | Threshold | Critical | Source key |
+|---|---|:---:|---|
+| Walk-forward OOS Sharpe | >= 0.5 | yes | `oos_sharpe_min` |
+| WFO efficiency (OOS / IS) | >= 0.4 |  | `wfo_efficiency_min` |
+| CPCV median OOS Sharpe (train-only params) | >= 0.3 | yes | `cpcv_median_sharpe_min` |
+| PBO / CSCV | <= 0.35 | yes | `pbo_max` |
+| Deflated Sharpe (per-period units, effective trials) | >= 0.9 | yes | `dsr_min` |
+| Block-bootstrap P(SR <= 0) | <= 0.1 | yes | `mc_prob_le_zero_max` |
+| Random-entry null p-value | <= 0.1 |  | `random_entry_p_max` |
+| Placebo shuffle p-value (same costs/turnover) | <= 0.1 | yes | `signal_shuffle_p_max` |
+| Sharpe at 3x costs, +1 bar | >= 0.3 | yes | `cost_3x_sharpe_min` |
+| Sharpe with +1 extra bar delay | >= 0.3 |  | `delay_sharpe_min` |
+| Parameter plateau share | >= 0.4 |  | `plateau_share_min` |
+| Minimum track record | >= 1 years and >= 20 trades | yes | `min_trades` |
+| Worst regime Sharpe (60+ days, >= 4 regimes) | >= -0.25 | yes | `regime_min_sharpe` |
+| Sealed holdout | one-time, human-only, logged before opening | yes | policy |
+
+Generated from `engine/validation.py` by `scripts/render_gates.py`. Do not edit this table by hand.
+<!-- gates:end -->
 
 One failed gate blocks promotion. Rejections are stored with a tearsheet; deleting them would make the
 trial count lie.
@@ -122,8 +132,35 @@ trial count lie.
 `live_ready` is a **label for human review**, not an execution state. There is no broker order code
 anywhere in the repository. Paper trading requires a stored human approval record; the simulator
 bootstraps the strategy's own out-of-sample returns and is labelled simulated. Agent code executes in
-a sandbox (no network, read-only mounts, CPU/RAM/PID/wall-clock limits, AST blocklist), never in the
-API process.
+a sandbox (no network, read-only mounts, CPU/RAM/PID/wall-clock limits, AST method allowlist). The
+Docker backend is used whenever available and production fails closed if it is not; the local
+subprocess runner is development-only.
+
+## Evidence gates after validation
+
+A passing validation report is not a performance claim. `GET /strategies/{id}/claim` withholds all
+headline metrics until three things exist:
+
+1. the latest validation report passed;
+2. a human opened the sealed holdout exactly once and its metrics were recorded
+   (`holdout_evaluation` is uniquely constrained by strategy version);
+3. a paper run has at least `MIN_PAPER_DAYS` distinct forward days and no active drift alert.
+
+Simulator paper results are labelled synthetic. The gate returns explicit blockers instead of
+pretending missing evidence is a pass.
+
+## Operations
+
+- **Migrations.** Alembic owns the schema in staging/production (`alembic upgrade head`);
+  `alembic check` fails on model drift. `AUTO_CREATE_SCHEMA` is for dev/test only.
+- **Sandboxed backtests.** With `ENGINE_SANDBOX=true`, the native engine runs in the sandbox
+  (`engine/sandbox_adapter.py`) instead of compiling agent code in the worker. Production refuses
+  to boot with it disabled. Build the image with `make sandbox-image`.
+- **Durable jobs.** Every worker attempt is recorded in `job_attempt`. A sprint whose heartbeat is
+  stale is requeued up to `JOB_MAX_ATTEMPTS`; deterministic failures are not retried automatically.
+- **Typed research artifacts.** Proposals are frozen with a hypothesis, falsifier, critique and trial
+  plan before code runs; the funnel prevents duplicate pre-registration and over-budget trials.
+- **Staging.** `infra/fly.staging.toml` is a separate app/database/Redis/lake configuration.
 
 ## Quality gates
 
@@ -148,7 +185,11 @@ See `.env.example`. Important variables:
 | `JOB_RUNNER` | `auto` | `arq`, `subprocess` or `sync` (tests only) |
 | `ALLOW_NETWORK` | `true` | false forces the labelled synthetic path |
 | `LAKE_ROOT` | `./artifacts/lake` | Parquet lake |
-| `SANDBOX_BACKEND` | `auto` | `docker` or `local` |
+| `SANDBOX_BACKEND` | `auto` | `docker` when available; production refuses `local` |
+| `ENGINE_SANDBOX` | `false` | run every backtest in the sandbox; production must be `true` |
+| `AUTO_CREATE_SCHEMA` | `true` | dev/test only; staging/production use Alembic |
+| `JOB_MAX_ATTEMPTS` | `3` | stale-worker requeue budget |
+| `MIN_PAPER_DAYS` | `30` | distinct forward days required before a claim |
 | `KILL_SWITCH` | `false` | stop new sprints immediately |
 | `ANTHROPIC_API_KEY` | — | required only for `LLM_PROVIDER=anthropic` |
 
@@ -172,9 +213,15 @@ reference topology. Deployment is intentionally manual: this repository does not
 
 ## Limitations
 
-- Free data is not point-in-time for most providers. Survivorship bias is flagged, not solved.
-- The native engine is the tested reference; optional engines require their extras and are not covered
-  by the engine coverage gate.
+- Yahoo Finance via `yfinance` is personal, non-commercial data and is not survivorship-free or
+  point-in-time. The lake records provider, fetch time and content hashes, and dataset metadata
+  exposes `point_in_time` / `survivorship_free` flags with a bias note. The bias is flagged, not
+  solved: there is no delisted-constituent reconstruction yet.
+- The native engine is the reference; vectorbt is covered by a parity test and the SPY walk-forward,
+  but not by the full engine coverage gate.
+- Docker execution is implemented, but the container path is not exercised in the development
+  environment (the daemon is permission-denied). The local subprocess backend has a native-parity
+  test; build `nullpoint-sandbox:latest` and verify a staging sprint before relying on it.
 - LLM cost figures are estimates from published token prices, not invoices.
 - Paper trading is simulation-first. Alpaca integration is read-only and restricted to paper endpoints.
 - Multi-tenant isolation, auth and rate limits are implemented, but this is not a hardened

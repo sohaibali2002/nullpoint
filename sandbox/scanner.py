@@ -180,6 +180,56 @@ BLOCKED_ATTRIBUTES: frozenset[str] = frozenset(
     }
 )
 
+# Signal code is data transformation, not I/O.  These allowlists replace the old "block a few
+# known-bad names" approach: an unknown method is rejected rather than trusted.
+SAFE_METHODS: frozenset[str] = frozenset(
+    {
+        "T", "abs", "add", "agg", "aggregate", "align", "all", "any", "apply", "argmax",
+        "argmin", "argsort", "around", "asfreq", "asof", "astype", "at", "between", "ceil",
+        "clip", "columns", "combine_first", "concat", "convert_dtypes", "copy", "corr", "count",
+        "cov", "cummax", "cummin", "cumprod", "cumsum", "describe", "diff", "div", "divide",
+        "dot", "drop", "drop_duplicates", "dropna", "dtype", "duplicated", "empty", "eq", "equal",
+        "ewm", "expanding", "exp", "ffill", "fillna", "filter", "first", "floordiv", "floor",
+        "ge", "get", "groupby", "gt", "head", "iat", "idxmax", "idxmin", "iloc", "index",
+        "interpolate", "isin", "isna", "isnull", "items", "keys", "kurt", "kurtosis", "last",
+        "le", "loc", "log", "log1p", "map", "mask", "max", "mean", "median", "merge", "min",
+        "mod", "mul", "multiply", "name", "ndim", "ne", "notna", "notnull", "nunique", "pct_change",
+        "pipe", "pow", "prod", "quantile", "rank", "rdiv", "reindex", "rename", "replace",
+        "reset_index", "rolling", "round", "rsub", "set_axis", "shape", "shift", "size", "skew",
+        "sort_index", "sort_values", "sqrt", "squeeze", "std", "sub", "subtract", "sum", "tail",
+        "to_frame", "to_numpy", "transform", "transpose", "truediv", "unique", "unstack", "values",
+        "var", "where", "xs", "day", "month", "year", "weekday", "quarter", "date",
+        "days_in_month", "is_month_end", "is_month_start", "normalize", "tz_localize",
+        "tz_convert", "strftime", "to_period",
+    }
+)
+
+SAFE_MODULE_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "pandas": frozenset(
+        {
+            "DataFrame", "Series", "Index", "MultiIndex", "Timestamp", "Timedelta", "NA", "NaT",
+            "concat", "cut", "get_dummies", "isna", "merge", "notna", "qcut", "to_datetime",
+            "to_numeric",
+        }
+    ),
+    "numpy": frozenset(
+        {
+            "abs", "arange", "argmax", "argmin", "array", "asarray", "ceil", "clip", "cos",
+            "cumprod", "cumsum", "diag", "diff", "dot", "e", "exp", "expm1", "eye", "float64",
+            "floor", "full", "inf", "int64", "isfinite", "isnan", "linspace", "log", "log1p",
+            "maximum", "mean", "median", "minimum", "nan", "nanmean", "nanstd", "ndarray", "ones",
+            "percentile", "pi", "power", "prod", "quantile", "repeat", "round", "sign", "sin",
+            "sqrt", "std", "sum", "tanh", "where", "zeros",
+        }
+    ),
+    "math": frozenset({"ceil", "exp", "floor", "isfinite", "log", "log1p", "sqrt"}),
+}
+
+FORBIDDEN_ATTRIBUTE_PREFIXES = ("read_", "to_", "fromfile", "fromregex", "memmap", "save", "load")
+FORBIDDEN_MODULE_PATHS = frozenset(
+    {"io", "lib", "ctypeslib", "testing", "f2py", "distutils", "core", "util", "compat", "_libs"}
+)
+
 SUSPICIOUS_ATTRIBUTES: frozenset[str] = frozenset(
     {"read", "write", "connect", "send", "recv", "env", "environ", "getenv", "now", "today"}
 )
@@ -221,6 +271,8 @@ class _Visitor(ast.NodeVisitor):
         self.findings: list[str] = []
         self.report = ScanReport()
         self.loop_depth = 0
+        # ``compile_signal`` injects these names even when the signal omits imports.
+        self.module_aliases: dict[str, str] = {"np": "numpy", "pd": "pandas"}
 
     def _fail(self, node: ast.AST, message: str) -> None:
         self.findings.append(f"line {getattr(node, 'lineno', '?')}: {message}")
@@ -230,6 +282,8 @@ class _Visitor(ast.NodeVisitor):
             self.report.imports.append(alias.name)
             if not _module_allowed(alias.name):
                 self._fail(node, f"import of blocked module {alias.name!r}")
+            root = alias.name.split(".")[0]
+            self.module_aliases[alias.asname or root] = root
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -237,6 +291,9 @@ class _Visitor(ast.NodeVisitor):
         self.report.imports.append(module)
         if not _module_allowed(module):
             self._fail(node, f"from-import of blocked module {module!r}")
+        root = module.split(".")[0]
+        for alias in node.names:
+            self.module_aliases[alias.asname or alias.name] = root
         for alias in node.names:
             if alias.name.startswith("_") and alias.name not in {"__future__"}:
                 self._fail(node, f"private import {alias.name!r}")
@@ -261,11 +318,24 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
-        if node.attr in BLOCKED_ATTRIBUTES:
+        root = node.value.id if isinstance(node.value, ast.Name) else None
+        module = self.module_aliases.get(root or "", root or "")
+        if module in SAFE_MODULE_ATTRIBUTES:
+            if node.attr in FORBIDDEN_MODULE_PATHS or node.attr.startswith(FORBIDDEN_ATTRIBUTE_PREFIXES):
+                self._fail(node, f"module reach-through or I/O via {module}.{node.attr}")
+            elif node.attr not in SAFE_MODULE_ATTRIBUTES[module]:
+                self._fail(node, f"{module}.{node.attr} is not on the signal allowlist")
+        elif node.attr in BLOCKED_ATTRIBUTES:
             self._fail(node, f"access to blocked attribute {node.attr!r}")
+        elif node.attr.startswith(FORBIDDEN_ATTRIBUTE_PREFIXES):
+            self._fail(node, f"I/O attribute {node.attr!r} is not permitted")
+        elif node.attr.startswith("__"):
+            self._fail(node, f"dunder attribute {node.attr!r} is not permitted")
+        elif node.attr not in SAFE_METHODS:
+            self._fail(node, f"attribute {node.attr!r} is not on the signal allowlist")
         elif node.attr in SUSPICIOUS_ATTRIBUTES:
             self.report.warnings.append(
-                f"line {node.lineno}: attribute {node.attr!r} needs review (not blocked)"
+                f"line {node.lineno}: attribute {node.attr!r} needs review"
             )
         self.generic_visit(node)
 

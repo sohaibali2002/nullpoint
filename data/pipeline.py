@@ -36,6 +36,8 @@ class Dataset:
     content_hash: str = ""
     fetched_at: str = ""
     lake_paths: list[str] = field(default_factory=list)
+    point_in_time: bool = False
+    survivorship_free: bool = False
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -49,6 +51,15 @@ class Dataset:
             "content_hash": self.content_hash,
             "warnings": self.warnings,
             "fetched_at": self.fetched_at,
+            "point_in_time": self.point_in_time,
+            "survivorship_free": self.survivorship_free,
+            "bias_note": (
+                "Prices are revised by the provider and the universe is not reconstructed from "
+                "delisted constituents; treat these results as biased until a point-in-time "
+                "universe is supplied."
+                if not (self.point_in_time and self.survivorship_free)
+                else "Point-in-time, survivorship-free data declared by the provider."
+            ),
         }
 
 

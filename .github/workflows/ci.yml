@@ -25,6 +25,13 @@ jobs:
         run: uv run ruff check .
       - name: Typecheck
         run: uv run mypy engine data agents sandbox apps/api/api
+      - name: Migrations upgrade and schema drift check
+        env:
+          DATABASE_URL: sqlite:///./artifacts/ci-migration.db
+        run: |
+          mkdir -p artifacts
+          uv run alembic upgrade head
+          uv run alembic check
       - name: Tests + coverage gate (engine & validation)
         env:
           LLM_PROVIDER: mock

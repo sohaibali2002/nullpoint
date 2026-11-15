@@ -26,6 +26,7 @@ def sprint_dict(sprint: Sprint) -> dict[str, Any]:
         "error": sprint.error,
         "created_at": sprint.created_at.isoformat() if sprint.created_at else None,
         "started_at": sprint.started_at.isoformat() if sprint.started_at else None,
+        "last_heartbeat_at": sprint.last_heartbeat_at.isoformat() if sprint.last_heartbeat_at else None,
         "ended_at": sprint.ended_at.isoformat() if sprint.ended_at else None,
         "disclaimer": DISCLAIMER,
     }

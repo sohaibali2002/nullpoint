@@ -97,4 +97,4 @@ npm --prefix apps/web run build
 | `EngineUnavailable` | Optional adapter not installed; use the native engine or install the extra. |
 | Worker does nothing | Redis unreachable. Check `REDIS_URL`; use `JOB_RUNNER=subprocess` as a fallback. |
 | Web shows demo data after login | Token missing/expired, or API proxy cannot reach `API_INTERNAL_URL`. |
-| Sandbox scanner rejects code | The AST blocklist fired; inspect the strategy error. Do not disable the scanner. |
+| Sandbox scanner rejects code | The AST allowlist rejected the code; inspect the strategy error. Do not disable the scanner. |

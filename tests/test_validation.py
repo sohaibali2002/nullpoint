@@ -27,6 +27,7 @@ from engine.validation import (
     signal_shuffle_null,
     trade_bootstrap,
     validate_strategy,
+    wilson_interval,
 )
 from tests.conftest import make_market_data, make_prices, make_trending_prices
 
@@ -260,6 +261,20 @@ def signal(features, params, close):
     assert report.gate("lookahead_scan") is not None
     assert report.gate("lookahead_scan").passed is False
     assert report.passed is False
+
+
+def test_wilson_interval_bounds_and_monte_carlo_reports_it():
+    assert wilson_interval(0, 0) == (0.0, 1.0)
+    low, high = wilson_interval(50, 100)
+    assert 0.39 < low < 0.50 < high < 0.61
+    zero_low, zero_high = wilson_interval(0, 100)
+    assert zero_low == 0.0
+    assert 0.0 < zero_high < 0.05
+    returns = pd.Series(np.random.default_rng(4).normal(0.0005, 0.01, 400))
+    result = block_bootstrap_returns(returns, n_sims=80, block=20, seed=4)
+    interval = result.as_dict()["extra"]["p_value_ci95"]
+    assert len(interval) == 2
+    assert 0.0 <= interval[0] <= interval[1] <= 1.0
 
 
 def test_gate_thresholds_are_explicit():

@@ -12,6 +12,11 @@ primary_region = "iad"
   SANDBOX_BACKEND = "docker"
   JOB_RUNNER = "arq"
   ALLOW_NETWORK = "true"
+  AUTO_CREATE_SCHEMA = "false"
+  ENGINE_SANDBOX = "true"
+
+[deploy]
+  release_command = "alembic upgrade head"
 
 [processes]
   api = "uvicorn api.main:app --host 0.0.0.0 --port 8000"

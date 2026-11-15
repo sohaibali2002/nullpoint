@@ -25,8 +25,12 @@ flowchart LR
 3. **Worker** runs agents and the engine. Long jobs are bounded by budget, wall clock, iteration caps
    and a kill switch.
 4. **Sandbox** executes strategy code with no network, read-only mounts, resource limits and an AST
-   blocklist. Local runner is a development fallback, not a production boundary.
+   method allowlist. Docker is selected whenever available; production fails closed if it is not.
+   With `ENGINE_SANDBOX=true`, the native backtest itself runs through the adapter, not just the
+   static scan. The local runner is development-only, not a production boundary.
 5. **Data lake** is a local Parquet store queried read-only through DuckDB (SELECT-only surface).
+6. **Job ledger** records each worker attempt and heartbeat. A reaper requeues only stale workers;
+   a deterministic failure is never retried silently.
 
 ## Request flow: a sprint
 
@@ -34,17 +38,23 @@ flowchart LR
 2. The API enqueues the job and returns immediately (or runs synchronously in tests).
 3. The orchestrator plans, asks the ideator for hypotheses, and hands each to the quant.
 4. The quant writes `signal(features, params, close)`; the sandbox scans and executes it.
-5. The backtester runs a parameter grid; every configuration increments the org-wide `TrialCounter`.
-6. The skeptic runs the validation gauntlet. The sealed holdout is hashed before the sprint and is not
+5. Before code runs, the hypothesis is frozen with a falsifier, critique and trial plan in the
+   pre-registration funnel; duplicates and over-budget trials are refused.
+6. The backtester runs a parameter grid; every configuration increments the org-wide `TrialCounter`.
+7. The skeptic runs the validation gauntlet. The sealed holdout is hashed before the sprint and is not
    readable by agents.
-7. Surviving strategies become `candidate`; failures become `rejected` and still receive a tearsheet.
-8. The auditor writes messages to `agent_message`; the UI replays them via `/messages` or SSE.
+8. Surviving strategies become `candidate`; failures become `rejected` and still receive a tearsheet.
+9. A performance claim additionally requires the one-time human holdout record and the paper-days
+   gate; until then `GET /strategies/{id}/claim` withholds headline metrics.
+10. The auditor writes messages to `agent_message`; the UI replays them via `/messages` or SSE.
 
 ## Data model (core)
 
 `organization → user/api_key → sprint → agent_message`
+`sprint → job_attempt` (durable worker heartbeat/retry ledger)
 `idea → strategy → experiment → validation_report`
 `strategy → approval → paper_run`
+`strategy → holdout_evaluation` (one row per version, unique constraint is the seal)
 `trial_counter` is org-scoped and monotonic; `portfolio` stores weights + metrics.
 
 All tenant tables carry `org_id`; every query in the routers filters by the authenticated principal's

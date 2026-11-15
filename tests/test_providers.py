@@ -13,6 +13,7 @@ from data.providers import (
     FredProvider,
     StooqProvider,
     YahooProvider,
+    YFinanceProvider,
     default_provider_order,
     get_provider,
     provider_catalog,
@@ -58,6 +59,36 @@ def test_yahoo_parses_and_prefers_adjusted_close():
     assert frame["close"].iloc[0] == pytest.approx(50.5)
     assert frame.attrs["provider"] == "yahoo"
     assert "available_at" in frame.columns
+
+
+def test_yfinance_provider_parses_and_uses_adjusted_close(monkeypatch):
+    import yfinance
+
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [102.0, 103.0],
+            "Low": [99.0, 100.0],
+            "Close": [101.0, 102.0],
+            "Adj Close": [50.5, 51.0],
+            "Volume": [1000, 1100],
+        },
+        index=pd.date_range("2020-01-02", periods=2, tz="UTC"),
+    )
+
+    class FakeTicker:
+        def history(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs["auto_adjust"] is False
+            return frame
+
+    monkeypatch.setattr(yfinance, "Ticker", lambda symbol: FakeTicker())
+    provider = YFinanceProvider()
+    out = provider.fetch_bars("SPY", "2020-01-01", "2020-01-10")
+    assert len(out) == 2
+    assert out["close"].iloc[0] == pytest.approx(50.5)
+    assert out.attrs["provider"] == "yfinance"
+    assert out.attrs["adjusted"] is True
+    assert str(out.index[0].date()) == "2020-01-02"
 
 
 def test_stooq_parses_csv_and_handles_missing():
@@ -145,14 +176,15 @@ def test_keyed_provider_requires_key(monkeypatch):
 def test_catalog_exposes_licences_and_factory():
     catalog = provider_catalog()
     names = {entry["name"] for entry in catalog}
-    assert {"yahoo", "stooq", "fred", "binance", "sec_edgar", "famafrench"} <= names
+    assert {"yfinance", "yahoo", "stooq", "fred", "binance", "sec_edgar", "famafrench"} <= names
     yahoo = next(entry for entry in catalog if entry["name"] == "yahoo")
     assert "PERSONAL" in yahoo["license_note"]
     assert get_provider("stooq").name == "stooq"
     with pytest.raises(ValueError):
         get_provider("bloomberg")
     assert default_provider_order("BTC/USDT")[0] == "binance"
-    assert default_provider_order("EURUSD=X")[0] == "yahoo"
+    assert default_provider_order("EURUSD=X")[0] == "yfinance"
+    assert default_provider_order("SPY")[0] == "yfinance"
 
 
 def test_provider_cache_avoids_second_fetch(tmp_path):

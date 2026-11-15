@@ -44,6 +44,21 @@ def test_scanner_blocks_dangerous_constructs(code: str) -> None:
         scan_code(code)
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import pandas as pd\ndef signal(f, p):\n    return pd.read_csv('/etc/passwd')\n",
+        "import pandas as pd\ndef signal(f, p):\n    return pd.read_pickle('x')\n",
+        "import numpy as np\ndef signal(f, p):\n    return np.fromfile('/etc/passwd')\n",
+        "import pandas as pd\ndef signal(f, p):\n    return pd.io.common.get_handle('x')\n",
+        "import numpy as np\ndef signal(f, p):\n    return np.lib.format.open_memmap('x')\n",
+    ],
+)
+def test_scanner_rejects_io_and_module_reach_through(code: str) -> None:
+    with pytest.raises(ScanError):
+        scan_code(code)
+
+
 def test_runner_executes_and_returns_structured_output():
     code = """
 import numpy as np
@@ -111,5 +126,20 @@ def test_docker_backend_clearly_reports_missing_daemon():
 
     sandbox = DockerSandbox()
     if not sandbox.available():
-        with pytest.raises(SandboxError, match="docker"):
+        with pytest.raises(SandboxError, match="daemon"):
             sandbox.run("value = 1")
+
+
+def test_auto_falls_back_to_local_and_production_refuses(monkeypatch):
+    from sandbox.runner import DockerSandbox, SandboxError
+
+    monkeypatch.setattr(DockerSandbox, "available", lambda self: False)
+    monkeypatch.setenv("SANDBOX_BACKEND", "auto")
+    monkeypatch.setenv("APP_ENV", "development")
+    result = run_in_sandbox("value = 1", harness="emit({'value': value})", backend="auto")
+    assert result.ok
+    assert result.backend == "local"
+
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(SandboxError, match="production requires"):
+        run_in_sandbox("value = 1", backend="auto")

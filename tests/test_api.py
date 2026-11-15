@@ -144,6 +144,12 @@ def test_sprint_launch_records_agents_and_never_papers(api):
 
     detail = api.get(f"/strategies/{strategies[0]['id']}", headers=_auth(token)).json()
     assert detail["spec"]["signal_code"]
+    claim = api.get(f"/strategies/{strategies[0]['id']}/claim", headers=_auth(token)).json()
+    assert claim["allowed"] is False
+    assert claim["metrics"] is None
+    assert claim["blockers"]
+    attempts = api.get(f"/sprints/{sprint_id}/attempts", headers=_auth(token))
+    assert attempts.status_code == 200
     validation = api.get(f"/strategies/{strategies[0]['id']}/validation", headers=_auth(token))
     assert validation.status_code in (200, 404)
     export = api.get(f"/strategies/{strategies[0]['id']}/export?format=python", headers=_auth(token)).json()

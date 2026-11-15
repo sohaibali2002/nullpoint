@@ -119,7 +119,14 @@ class ToolContext:
         self.bus = bus
         self.budget = budget
         self.lake = lake or DataLake(settings.lake_root)
-        self.adapter = adapter or get_adapter("native")
+        if adapter is not None:
+            self.adapter = adapter
+        elif settings.engine_sandbox:
+            from engine.sandbox_adapter import SandboxEngineAdapter
+
+            self.adapter = SandboxEngineAdapter(production=settings.is_production)
+        else:
+            self.adapter = get_adapter("native")
         self.allow_network = allow_network
         self.trial_counter = DBTrialCounter(session, org_id)
         self._dataset: Dataset | None = None

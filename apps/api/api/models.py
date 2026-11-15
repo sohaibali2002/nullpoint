@@ -193,6 +193,7 @@ class Sprint(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(String(32), default="human")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -326,6 +327,42 @@ class Approval(Base):
     approved_by: Mapped[str] = mapped_column(String(32))
     note: Mapped[str] = mapped_column(Text, default="")
     approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class JobAttempt(Base):
+    """Durable record of every worker attempt; stale heartbeats are safely requeued."""
+
+    __tablename__ = "job_attempt"
+    __table_args__ = (UniqueConstraint("sprint_id", "attempt", name="uq_job_attempt_sprint_attempt"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    sprint_id: Mapped[str] = mapped_column(ForeignKey("sprint.id", ondelete="CASCADE"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(24), default="running")
+    transient: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class HoldoutEvaluation(Base):
+    """One-time, human-authorised holdout opening.  The unique constraint is the seal."""
+
+    __tablename__ = "holdout_evaluation"
+    __table_args__ = (
+        UniqueConstraint("strategy_id", "strategy_version", name="uq_holdout_strategy_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    strategy_id: Mapped[str] = mapped_column(ForeignKey("strategy.id", ondelete="CASCADE"))
+    strategy_version: Mapped[int] = mapped_column(Integer, default=1)
+    opened_by: Mapped[str] = mapped_column(String(120))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    report_hash: Mapped[str] = mapped_column(String(64), default="")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AlertEvent(Base):

@@ -16,6 +16,11 @@ import pandas as pd
 TRADING_DAYS = 252
 
 
+def annualized_sharpe_to_periodic(sr: float, periods_per_year: int = TRADING_DAYS) -> float:
+    """Convert an annualised Sharpe ratio to the per-period units used by PSR/DSR."""
+    return float(sr) / float(np.sqrt(periods_per_year))
+
+
 @dataclass(frozen=True)
 class Trade:
     symbol: str

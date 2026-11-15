@@ -3,7 +3,8 @@
 ## Authentication
 
 - Email + password registration/login, bcrypt password hashes (`api/security.py`).
-- JWT bearer tokens (HS256) with expiry; `AUTH_SECRET` must be set to a random value in production.
+- JWT bearer tokens (HS256) with expiry. Production refuses to boot with the default development
+  `SECRET_KEY`; set a unique 32+ character value.
 - API keys are generated as `np_…`, shown once, stored as SHA-256 hashes with a short prefix for
   lookup. Revocation is a soft delete.
 - Roles: `owner`, `admin`, `analyst`, `viewer`. Write operations require a non-viewer; settings and
@@ -19,13 +20,19 @@ return 404 rather than leaking existence. There is no admin cross-tenant read en
 
 Agent-written strategy code is untrusted.
 
-- AST scan blocks imports outside an allowlist, `eval`/`exec`/`compile`, dunder access, filesystem and
-  network primitives, and process spawning.
-- Execution happens in `sandbox/`, never in the API process.
+- AST scan uses a method allowlist: imports outside the allowlist, `pd.read_*`, `np.fromfile`,
+  `pd.io.*`/`np.lib.*` reach-through, dunder access, filesystem/network primitives and process
+  spawning are rejected. Unknown methods fail closed.
+- Execution happens in `sandbox/`, never in the API process. `SANDBOX_BACKEND=auto` selects Docker
+  when it is available; production refuses to start with the local backend and fails closed if Docker
+  is unavailable.
+- With `ENGINE_SANDBOX=true`, agent-authored signals run through `engine/sandbox_adapter.py`, which
+  sends the actual native backtest to the sandbox. Production refuses to start with it disabled.
 - Docker backend: no network, read-only mounts, tmpfs workdir, CPU/memory/PID limits, wall-clock
   timeout, dropped capabilities.
 - The local subprocess backend is a development fallback with reduced isolation; do not use it for
   multi-tenant production.
+- The worker subprocess receives an allowlisted environment; API/LLM/broker secrets are not inherited.
 - Outputs are parsed as JSON with size limits.
 
 ## Secrets

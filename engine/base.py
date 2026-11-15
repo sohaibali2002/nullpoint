@@ -178,6 +178,7 @@ class GridResult:
     best_params: dict[str, Any]
     trial_index: int
     failures: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> list[dict[str, Any]]:
         rows = []
@@ -310,6 +311,71 @@ class EngineAdapter(ABC):
             failures=failures,
         )
 
+    # --------------------------------------------------------------- tribes
+    def run_tribes(
+        self,
+        spec: StrategySpec,
+        space: Mapping[str, Iterable[Any]],
+        data: MarketData,
+        *,
+        objective: str = "sharpe",
+        trial_counter: TrialCounter | None = None,
+        min_trades: int = 3,
+        cost_multiplier: float = 1.0,
+        max_trials: int = 40,
+        seed: int = 7,
+    ) -> GridResult:
+        """Optimise with the parameter-free TRIBES swarm instead of exhaustive search."""
+        from engine.tribes import ParameterSpace, TribesOptimizer
+
+        if objective not in OBJECTIVES:
+            raise ValueError(f"objective must be one of {OBJECTIVES}")
+        parameter_space = ParameterSpace.from_grid(space)
+        results: list[BacktestResult] = []
+        failures: list[dict[str, Any]] = []
+
+        def score(params: dict[str, Any]) -> float:
+            try:
+                result = self.run_backtest(
+                    spec.with_params(params),
+                    data,
+                    trial_counter=trial_counter,
+                    cost_multiplier=cost_multiplier,
+                )
+            except Exception as exc:
+                failures.append({"params": params, "error": str(exc)})
+                if trial_counter is not None:
+                    trial_counter.increment(1)
+                return float("-inf")
+            results.append(result)
+            return _score(result, objective, min_trades)
+
+        optimizer = TribesOptimizer(
+            parameter_space,
+            max_evaluations=max_trials,
+            seed=seed,
+        )
+        outcome = optimizer.minimize(score)
+        best = max(results, key=lambda r: _score(r, objective, min_trades)) if results else None
+        if best is not None and _score(best, objective, min_trades) == float("-inf"):
+            best = None
+        return GridResult(
+            spec_id=spec.name,
+            objective=objective,
+            results=results,
+            best=best,
+            best_params=dict(best.params) if best else {},
+            trial_index=trial_counter.value if trial_counter else 0,
+            failures=failures,
+            # TRIBES metadata is attached for replay/debugging without changing the contract.
+            metadata={
+                "optimizer": "tribes",
+                "evaluations": outcome.evaluations,
+                "best_score": outcome.best_score,
+                "history": outcome.history,
+            },
+        )
+
     # -------------------------------------------------------- walk-forward
     def run_walk_forward(
         self,
@@ -326,9 +392,15 @@ class EngineAdapter(ABC):
         min_trades: int = 3,
         trial_counter: TrialCounter | None = None,
         cost_multiplier: float = 1.0,
+        optimizer: str = "grid",
+        max_trials: int = 40,
+        warmup_bars: int = 120,
+        seed: int = 7,
     ) -> WalkForwardReport:
         if mode not in {"rolling", "anchored"}:
             raise ValueError("mode must be 'rolling' or 'anchored'")
+        if optimizer not in {"grid", "tribes"}:
+            raise ValueError("optimizer must be 'grid' or 'tribes'")
         n = len(data.close)
         test_bars = test_bars or max(20, n // (folds + 2))
         train_bars = train_bars or max(60, test_bars * 2)
@@ -346,15 +418,29 @@ class EngineAdapter(ABC):
             train_start = 0 if mode == "anchored" else max(0, train_end - train_bars)
             if train_end - train_start < 40 or test_start >= test_end:
                 continue
-            train = self.run_grid(
-                spec,
-                param_grid,
-                data.slice(train_start, train_end),
-                objective=objective,
-                trial_counter=trial_counter,
-                min_trades=min_trades,
-                cost_multiplier=cost_multiplier,
-            )
+            train_data = data.slice(train_start, train_end)
+            if optimizer == "tribes":
+                train = self.run_tribes(
+                    spec,
+                    param_grid,
+                    train_data,
+                    objective=objective,
+                    trial_counter=trial_counter,
+                    min_trades=min_trades,
+                    cost_multiplier=cost_multiplier,
+                    max_trials=max_trials,
+                    seed=seed,
+                )
+            else:
+                train = self.run_grid(
+                    spec,
+                    param_grid,
+                    train_data,
+                    objective=objective,
+                    trial_counter=trial_counter,
+                    min_trades=min_trades,
+                    cost_multiplier=cost_multiplier,
+                )
             if train.best is None:
                 fold_records.append(
                     {
@@ -365,16 +451,35 @@ class EngineAdapter(ABC):
                     }
                 )
                 continue
-            oos = self.run_backtest(
+            # Keep the warm-up history so features and trailing covariance are defined at the
+            # first test bar; score only the test window, never the warm-up returns.
+            warmup_start = max(0, test_start - max(0, warmup_bars))
+            oos_full = self.run_backtest(
                 spec.with_params(train.best_params),
-                data.slice(test_start, test_end),
+                data.slice(warmup_start, test_end),
                 trial_counter=trial_counter,
                 cost_multiplier=cost_multiplier,
             )
-            oos_parts.append(oos.returns)
+            test_index = data.index[test_start:test_end]
+            oos_returns = oos_full.returns.reindex(test_index).fillna(0.0)
+            oos_positions = oos_full.positions.reindex(test_index).fillna(0.0)
+            oos_equity = (1.0 + oos_returns).cumprod()
+            fold_benchmark = data.benchmark_series(spec.benchmark)
+            fold_bench_returns = (
+                fold_benchmark.reindex(test_index).pct_change(fill_method=None).fillna(0.0)
+                if fold_benchmark is not None
+                else None
+            )
+            oos_metrics = compute_metrics(
+                oos_returns,
+                oos_equity,
+                positions=oos_positions,
+                benchmark=fold_bench_returns,
+            )
+            oos_parts.append(oos_returns)
             chosen.append(train.best_params)
             is_sharpe = float(train.best.metrics.get("sharpe", 0.0))
-            oos_sharpe = float(oos.metrics.get("sharpe", 0.0))
+            oos_sharpe = float(oos_metrics.get("sharpe", 0.0))
             fold_records.append(
                 {
                     "fold": i,
@@ -388,10 +493,11 @@ class EngineAdapter(ABC):
                     },
                     "oos_metrics": {
                         "sharpe": oos_sharpe,
-                        "cagr": oos.metrics.get("cagr"),
-                        "max_drawdown": oos.metrics.get("max_drawdown"),
-                        "n_trades": len(oos.trades),
+                        "cagr": oos_metrics.get("cagr"),
+                        "max_drawdown": oos_metrics.get("max_drawdown"),
+                        "n_trades": len(oos_full.trades),
                     },
+                    "warmup_bars": test_start - warmup_start,
                     "efficiency": oos_sharpe / is_sharpe if abs(is_sharpe) > 1e-9 else 0.0,
                 }
             )
@@ -464,6 +570,10 @@ def get_adapter(name: str = "native") -> EngineAdapter:
         from engine.backtesting_adapter import BacktestingPyAdapter
 
         adapter = BacktestingPyAdapter()
+    elif name in {"sandbox", "sandbox-native"}:
+        from engine.sandbox_adapter import SandboxEngineAdapter
+
+        adapter = SandboxEngineAdapter()
     else:
         raise ValueError(f"unknown engine adapter {name!r}")
     _ADAPTER_CACHE[name] = adapter
@@ -472,7 +582,11 @@ def get_adapter(name: str = "native") -> EngineAdapter:
 
 def list_adapters() -> dict[str, dict[str, Any]]:
     availability: dict[str, dict[str, Any]] = {
-        "native": {"available": True, "note": "NumPy/pandas reference engine (always available)"}
+        "native": {"available": True, "note": "NumPy/pandas reference engine (always available)"},
+        "sandbox": {
+            "available": True,
+            "note": "native engine executed in the sandbox; production requires Docker",
+        },
     }
     try:
         import vectorbt  # noqa: F401

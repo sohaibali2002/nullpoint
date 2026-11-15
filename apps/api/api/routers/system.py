@@ -38,7 +38,7 @@ REQUESTS = Counter("nullpoint_requests_total", "HTTP requests", ["method", "path
 
 @router.get("/health")
 def health(db: Session = Depends(get_db)) -> dict[str, Any]:
-    checks = {"database": "ok", "redis": "unknown", "sandbox": os.environ.get("NULLPOINT_SANDBOX_BACKEND", "local")}
+    checks = {"database": "ok", "redis": "unknown", "sandbox": os.environ.get("SANDBOX_BACKEND", "auto")}
     try:
         db.execute(text("SELECT 1"))
     except Exception:
@@ -116,7 +116,7 @@ def get_settings(
             "llm_provider": settings.llm_provider,
             "job_runner": settings.job_runner,
             "allow_network": settings.allow_network,
-            "sandbox_backend": os.environ.get("NULLPOINT_SANDBOX_BACKEND", "local"),
+            "sandbox_backend": os.environ.get("SANDBOX_BACKEND", "auto"),
             "kill_switch": settings.kill_switch,
             "live_trading_enabled": False,
         },
@@ -266,7 +266,7 @@ def safety() -> dict[str, Any]:
         "kill_switch": settings.kill_switch,
         "sealed_holdout": "agents never see the final 20% of the sample",
         "sandbox": {
-            "backend": os.environ.get("NULLPOINT_SANDBOX_BACKEND", "local"),
+            "backend": os.environ.get("SANDBOX_BACKEND", "auto"),
             "network": "none (docker backend)",
             "limits": "CPU, memory, pids, wall clock, read-only mounts",
         },

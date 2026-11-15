@@ -74,7 +74,10 @@ class NativeAdapter(EngineAdapter):
         positions = self._size(close, positions, spec)
 
         asset_returns = close.pct_change(fill_method=None).fillna(0.0)
-        gross = (positions * asset_returns).sum(axis=1)
+        # A position is established at the close of bar t and therefore earns the return of
+        # bar t+1, never the return that produced the signal.  The shift is the execution
+        # boundary; removing it silently turns every strategy into a same-bar oracle.
+        gross = (positions.shift(1) * asset_returns).sum(axis=1)
         costs = self._costs(positions, spec, merged, cost_multiplier)
         net = (gross - costs).fillna(0.0)
 
@@ -188,7 +191,9 @@ class NativeAdapter(EngineAdapter):
         if target_vol:
             rets = close.pct_change(fill_method=None).fillna(0.0)
             window = min(60, max(20, len(rets) // 4))
-            cov = rets.rolling(window, min_periods=window // 2).cov()
+            # Size at close t with the covariance known at close t-1.  Including bar t's
+            # return would let the position size react to the return it is about to earn.
+            cov = rets.shift(1).rolling(window, min_periods=window // 2).cov()
             vols = []
             for dt in sized.index:
                 try:
@@ -239,10 +244,18 @@ class NativeAdapter(EngineAdapter):
         first_idx = int(np.argmax(breach.to_numpy()))
         net = net.copy()
         positions = positions.copy()
-        exit_cost = positions.iloc[first_idx].abs().sum() * spec.costs.per_turnover_bps * cost_multiplier / 10_000.0
-        net.iloc[first_idx] -= exit_cost
-        net.iloc[first_idx + 1 :] = 0.0
-        positions.iloc[first_idx + 1 :] = 0.0
+        exit_idx = min(first_idx + 1, len(net) - 1)
+        exit_cost = (
+            positions.iloc[first_idx].abs().sum()
+            * spec.costs.per_turnover_bps
+            * cost_multiplier
+            / 10_000.0
+        )
+        # Exit at the next close.  The return of the exit bar was earned by the position
+        # still held at the previous close, so it must remain in the series.
+        positions.iloc[exit_idx:] = 0.0
+        net.iloc[exit_idx] -= exit_cost
+        net.iloc[exit_idx + 1 :] = 0.0
         return net, positions
 
 

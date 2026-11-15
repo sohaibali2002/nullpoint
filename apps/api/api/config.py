@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     secret_key: SecretStr = SecretStr("dev-insecure-secret-change-me-32-chars-minimum")
     access_token_ttl_minutes: int = 720
+    sandbox_backend: Literal["auto", "docker", "local"] = "auto"
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     # Storage
@@ -51,6 +52,10 @@ class Settings(BaseSettings):
     max_agent_iterations: int = 3
     max_strategies_per_sprint: int = 6
     job_runner: Literal["auto", "arq", "subprocess", "sync"] = "auto"
+    job_max_attempts: int = Field(default=3, ge=1, le=10)
+    job_stale_minutes: int = Field(default=120, ge=5, le=1440)
+    auto_create_schema: bool = True
+    min_paper_days: int = Field(default=30, ge=1, le=365)
     artifacts_dir: Path = Path("artifacts")
 
     # Data providers (all free tiers)
@@ -97,6 +102,7 @@ class Settings(BaseSettings):
     # Execution safety
     kill_switch: bool = False
     live_trading_enabled: bool = False  # intentionally unsupported; kept for auditability
+    engine_sandbox: bool = False  # production must be true; runs every backtest in the sandbox
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -104,6 +110,30 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [v.strip() for v in value.split(",") if v.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _production_guards(self) -> Settings:
+        if self.app_env == "production":
+            if self.secret_key.get_secret_value() == "dev-insecure-secret-change-me-32-chars-minimum":
+                raise ValueError(
+                    "refusing to boot in production with the default JWT secret; "
+                    "set SECRET_KEY to a unique 32+ character value"
+                )
+            if self.sandbox_backend == "local":
+                raise ValueError(
+                    "refusing to boot in production with the local sandbox; set SANDBOX_BACKEND=docker"
+                )
+            if self.auto_create_schema:
+                raise ValueError(
+                    "refusing to create schema in production; run `alembic upgrade head` and set "
+                    "AUTO_CREATE_SCHEMA=false"
+                )
+            if not self.engine_sandbox:
+                raise ValueError(
+                    "refusing to run agent-authored strategies in-process in production; "
+                    "set ENGINE_SANDBOX=true"
+                )
+        return self
 
     @property
     def is_production(self) -> bool:

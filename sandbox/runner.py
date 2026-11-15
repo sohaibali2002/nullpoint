@@ -7,8 +7,10 @@ Two backends:
 * ``local`` — development/tests only: a fresh process group with rlimits and a stripped environment.
   It is not a security boundary against a determined attacker; CI and production use docker.
 
-Agent code never runs in the API or worker process. ``run_in_sandbox`` is called from the worker
-with scanned code, and the result is data (JSON), not objects.
+``run_in_sandbox`` is called from the worker with scanned code, and the result is data (JSON), not
+objects. With ``ENGINE_SANDBOX=true`` the native backtest itself runs through
+``engine.sandbox_adapter``; without it, the research/CLI harness may still execute the reference
+engine in-process.
 """
 
 from __future__ import annotations
@@ -104,6 +106,7 @@ class LocalSubprocessSandbox:
         harness: str = "",
         payload: dict[str, Any] | None = None,
         data_dir: Path | None = None,
+        project_dir: Path | None = None,
     ) -> ExecutionResult:
         try:
             report = scan_code(code)
@@ -134,6 +137,8 @@ class LocalSubprocessSandbox:
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "MPLBACKEND": "Agg",
                 "HOME": str(work),
+                "NP_PROJECT_ROOT": str(project_dir) if project_dir is not None else "",
+                "NP_DATA_DIR": str(data_dir) if data_dir is not None else "",
                 # Numerical libraries must not spawn a thread pool: the process limit is tight and
                 # oversubscription stalls otherwise deterministic backtests.
                 "OPENBLAS_NUM_THREADS": "1",
@@ -203,7 +208,20 @@ class DockerSandbox:
     backend: str = "docker"
 
     def available(self) -> bool:
-        return shutil.which("docker") is not None
+        """The CLI can exist while the daemon is missing or permission-denied."""
+        if shutil.which("docker") is None:
+            return False
+        try:
+            probe = subprocess.run(
+                ["docker", "info", "--format", "{{.ServerVersion}}"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return probe.returncode == 0 and bool(probe.stdout.strip())
 
     def run(
         self,
@@ -212,6 +230,7 @@ class DockerSandbox:
         harness: str = "",
         payload: dict[str, Any] | None = None,
         data_dir: Path | None = None,
+        project_dir: Path | None = None,
     ) -> ExecutionResult:
         try:
             report = scan_code(code)
@@ -226,7 +245,9 @@ class DockerSandbox:
                 scan={"blocked": exc.findings},
             )
         if not self.available():
-            raise SandboxError("docker backend requested but the docker CLI is not available")
+            raise SandboxError(
+                "docker backend requested but the daemon is unavailable or not accessible"
+            )
 
         work = Path(tempfile.mkdtemp(prefix="np-sandbox-"))
         work.chmod(0o777)
@@ -254,6 +275,12 @@ class DockerSandbox:
             ]  # fmt: skip
             if data_dir is not None:
                 cmd += ["-v", f"{Path(data_dir).resolve()}:/data:ro"]
+            # The sandbox image is built from this repository and contains the engine at /srv.
+            # Do not bind-mount a host path here: the daemon may be remote and the image is the
+            # reproducible execution environment.  project_dir is used by the local backend.
+            if project_dir is not None:
+                cmd += ["-e", "NP_PROJECT_ROOT=/srv"]
+            cmd += ["-e", "NP_DATA_DIR=/data"]
             for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
                 cmd += ["-e", f"{key}=1"]
             cmd += [self.image, "python", "-I", "/work/main.py"]
@@ -305,14 +332,44 @@ def run_in_sandbox(
     harness: str = "",
     payload: dict[str, Any] | None = None,
     data_dir: Path | None = None,
+    project_dir: Path | None = None,
     backend: Literal["auto", "docker", "local"] = "auto",
     limits: SandboxLimits | None = None,
+    production: bool | None = None,
 ) -> ExecutionResult:
     limits = limits or SandboxLimits()
-    if backend == "auto":
-        backend = "docker" if os.environ.get("NULLPOINT_SANDBOX_BACKEND", "local") == "docker" else "local"
-    runner = DockerSandbox(limits=limits) if backend == "docker" else LocalSubprocessSandbox(limits=limits)
-    return runner.run(code, harness=harness, payload=payload, data_dir=data_dir)
+    is_production = (
+        production
+        if production is not None
+        else os.environ.get("APP_ENV", "development").lower() == "production"
+    )
+    configured = os.environ.get("SANDBOX_BACKEND", "auto").lower().strip()
+    if configured not in {"auto", "docker", "local"}:
+        raise SandboxError(f"invalid SANDBOX_BACKEND={configured!r}; use auto, docker or local")
+    requested = configured if backend == "auto" else backend
+    if requested == "auto":
+        # Wire the real container into the path whenever it exists.  In production an
+        # unavailable Docker daemon is a hard failure, never a silent downgrade.
+        requested = "docker" if DockerSandbox(limits=limits).available() else "local"
+        if requested == "local" and is_production:
+            raise SandboxError(
+                "production requires the Docker sandbox; Docker is unavailable. "
+                "Refusing to execute agent code in the local process."
+            )
+    if requested == "docker":
+        runner = DockerSandbox(limits=limits)
+        if not runner.available():
+            raise SandboxError(
+                "Docker sandbox requested but the docker CLI is unavailable; refusing to fall back"
+            )
+        return runner.run(
+            code, harness=harness, payload=payload, data_dir=data_dir, project_dir=project_dir
+        )
+    if is_production:
+        raise SandboxError("the local sandbox is disabled in production")
+    return LocalSubprocessSandbox(limits=limits).run(
+        code, harness=harness, payload=payload, data_dir=data_dir, project_dir=project_dir
+    )
 
 
 def kill_process_group(pid: int) -> None:  # pragma: no cover - used by the worker kill switch

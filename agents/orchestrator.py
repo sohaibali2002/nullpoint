@@ -33,6 +33,15 @@ from api.models import (
 )
 from sqlalchemy.orm import Session
 
+from agents.artifacts import (
+    CritiqueArtifact,
+    CritiqueVerdict,
+    FunnelStage,
+    HypothesisArtifact,
+    TrialFunnel,
+    TrialPlanArtifact,
+    canonical_hash,
+)
 from agents.bus import BudgetExceeded, BudgetGuard, MessageBus
 from agents.roster import (
     AGENT_SPECS,
@@ -148,6 +157,7 @@ class SprintRunner:
         )
 
         candidates: dict[str, dict[str, Any]] = {}
+        funnel = TrialFunnel(max_total_trials=100_000)
         rejected: list[dict[str, Any]] = []
         tearsheets: list[dict[str, Any]] = []
         dataset_meta: dict[str, Any] = {}
@@ -221,6 +231,61 @@ class SprintRunner:
                     continue
                 idea_id = idea_record["idea_id"]
                 template = get_template(proposal["template_key"])
+                proposal["hypothesis_id"] = idea_id
+                hypothesis = HypothesisArtifact(
+                    hypothesis_id=idea_id,
+                    title=proposal["title"],
+                    family=proposal["family"],
+                    mechanism=proposal.get("rationale") or template.rationale,
+                    prediction=(
+                        f"{proposal['hypothesis']} The predicted edge must survive walk-forward, "
+                        "CPCV and 3x costs on the visible sample."
+                    ),
+                    falsifier=(
+                        "Reject if any critical gate fails, if PBO exceeds the registered limit, "
+                        "or if the edge disappears under a one-bar execution delay."
+                    ),
+                    universe=universe,
+                    parameters=proposal.get("params") or template.params,
+                    tags=list(proposal.get("tags") or template.tags),
+                )
+                critique = CritiqueArtifact(
+                    hypothesis_id=idea_id,
+                    verdict=CritiqueVerdict.REVISE,
+                    threats=[
+                        "multiple-testing inflation",
+                        "regime dependence",
+                        "cost and turnover sensitivity",
+                    ],
+                    required_changes=[
+                        "independent reimplementation before release",
+                        "paper evidence before any performance claim",
+                    ],
+                )
+                grid_size = 1
+                for values in template.grid.values():
+                    grid_size *= max(1, len(values))
+                trial_plan = TrialPlanArtifact(
+                    hypothesis_id=idea_id,
+                    tests=[
+                        "walk-forward",
+                        "CPCV",
+                        "PBO",
+                        "deflated Sharpe",
+                        "signal-shuffle null",
+                        "3x cost and delay stress",
+                        "regime robustness",
+                    ],
+                    success_criteria="All critical gates pass on the visible sample",
+                    failure_criteria="Any critical gate fails, including PBO > 0.35",
+                    max_trials=max(grid_size, 1) * max(1, int(plan["max_iterations"])) + 8,
+                    grid_hash=canonical_hash({"grid": template.grid})[:16],
+                )
+                try:
+                    funnel.pre_register(hypothesis, critique, trial_plan)
+                except ValueError as exc:
+                    bus.emit("orchestrator", f"Pre-registration refused: {exc}. Skipping duplicate claim.")
+                    continue
 
                 strategy: Strategy | None = None
                 spec = None
@@ -246,6 +311,8 @@ class SprintRunner:
                         ctx.invoke(coder.spec, "scan_code", code=spec.signal_code)
                     except ScanError as exc:
                         bus.emit("strategy_coder", f"AST scan rejected the strategy: {exc}. Killed.")
+                        if funnel.records[idea_id].stage != FunnelStage.FALSIFIED:
+                            funnel.advance(idea_id, FunnelStage.FALSIFIED, reason="scanner rejection")
                         break
 
                     strategy = Strategy(
@@ -271,10 +338,18 @@ class SprintRunner:
                     self._sync_budget(sprint, budget, ctx)
                     if grid.best is None:
                         bus.emit("backtester", "No grid candidate met the minimum trade count. Rejecting idea.")
+                        funnel.advance(idea_id, FunnelStage.FALSIFIED, reason="no grid candidate")
                         self._transition(strategy, StrategyStatus.REJECTED)
                         break
 
+                    if funnel.records[idea_id].stage == FunnelStage.PRE_REGISTERED:
+                        funnel.advance(idea_id, FunnelStage.IMPLEMENTED, reason="grid implementation complete")
                     result = grid.best
+                    funnel.record_trial(
+                        idea_id,
+                        params=grid.best_params,
+                        score=float(result.metrics.get("sharpe", 0.0)),
+                    )
                     self._save_experiment(sprint, strategy, "grid", result, visible, ctx,
                                           {"grid": template.grid, "best_params": grid.best_params})
                     strategy.metrics = dict(result.metrics)
@@ -286,6 +361,7 @@ class SprintRunner:
                     self._sync_budget(sprint, budget, ctx)
                     if report.passed:
                         validated = True
+                        funnel.advance(idea_id, FunnelStage.PORTFOLIO_FIT, reason="critical gates passed")
                         self._transition(strategy, StrategyStatus.VALIDATED)
                         bus.emit("skeptic", f"Promoting to VALIDATED: {report.recommendation.upper()}.")
                         break
@@ -297,6 +373,7 @@ class SprintRunner:
                     self._transition(strategy, StrategyStatus.REJECTED)
                     if attempt + 1 < int(plan["max_iterations"]):
                         continue
+                    funnel.advance(idea_id, FunnelStage.FALSIFIED, reason="validation failed")
 
                 if validated and strategy is not None and result is not None and report is not None and spec is not None:
                     risk = risk_analyst.assess(
@@ -444,6 +521,7 @@ class SprintRunner:
                 "candidates": len(candidates),
                 "rejected": rejected,
                 "trials": ctx.trial_counter.value,
+                "funnel": funnel.summary(),
                 "budget": budget.snapshot(),
                 "dataset": dataset_meta,
                 "sealed_holdout": sealed_meta,
@@ -470,6 +548,7 @@ class SprintRunner:
                 "candidates": len(candidates),
                 "rejected": rejected,
                 "trials": ctx.trial_counter.value,
+                "funnel": funnel.summary(),
                 "disclaimer": DISCLAIMER,
             }
             self.session.commit()

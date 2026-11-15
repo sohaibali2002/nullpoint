@@ -98,6 +98,91 @@ class YahooProvider(BarProvider):
 
 
 @dataclass
+class YFinanceProvider(BarProvider):
+    """Yahoo Finance via the maintained ``yfinance`` library.
+
+    This is the preferred personal-use path.  It handles Yahoo's crumb/cookie changes and
+    adjusted prices for us; the raw HTTP provider stays as a fallback for environments where
+    the library is unavailable.
+    """
+
+    meta: ProviderMeta = field(
+        default_factory=lambda: ProviderMeta(
+            name="yfinance",
+            requires_key=False,
+            asset_classes=("equity", "etf", "fx", "index", "crypto"),
+            license_note="Yahoo Finance data via yfinance is for PERSONAL, non-commercial use. "
+            "Do not redistribute the data. Replace with a licensed feed before any commercial launch.",
+            homepage="https://github.com/ranaroussi/yfinance",
+            rate_limit_per_min=30,
+        )
+    )
+
+    def available(self) -> bool:
+        try:
+            import yfinance  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    def fetch_bars(
+        self,
+        symbol: str,
+        start: str | pd.Timestamp,
+        end: str | pd.Timestamp,
+        interval: str = "1d",
+    ) -> pd.DataFrame:
+        try:
+            import yfinance as yf
+        except Exception as exc:  # pragma: no cover - dependency is declared
+            raise ProviderUnavailable("yfinance: install the yfinance package") from exc
+
+        start_ts = pd.Timestamp(start).normalize()
+        end_ts = pd.Timestamp(end).normalize()
+        if end_ts >= start_ts:
+            end_ts = end_ts + pd.Timedelta(days=1)
+        try:
+            frame = yf.Ticker(symbol).history(
+                start=start_ts.date().isoformat(),
+                end=end_ts.date().isoformat(),
+                interval=interval,
+                auto_adjust=False,
+                actions=False,
+                repair=True,
+            )
+        except Exception as exc:
+            raise ProviderError(f"yfinance: {exc}") from exc
+        if frame is None or frame.empty:
+            raise DataUnavailable(f"yfinance: no rows for {symbol}")
+
+        frame = frame.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Adj Close": "adj_close",
+                "Volume": "volume",
+            }
+        )
+        frame = frame[[c for c in ("open", "high", "low", "close", "adj_close", "volume") if c in frame]]
+        if "adj_close" in frame and frame["adj_close"].notna().any():
+            frame["close"] = frame["adj_close"].where(frame["adj_close"].notna(), frame["close"])
+        index = pd.DatetimeIndex(frame.index)
+        if index.tz is not None:
+            index = index.tz_convert(None)
+        frame.index = index.normalize()
+        frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+        return normalize_bars(
+            frame,
+            provider="yfinance",
+            symbol=symbol,
+            interval=interval,
+            adjusted=True,
+        )
+
+
+@dataclass
 class StooqProvider(BarProvider):
     meta: ProviderMeta = field(
         default_factory=lambda: ProviderMeta(
@@ -488,6 +573,7 @@ class FamaFrenchProvider(BarProvider):
 
 
 PROVIDER_CLASSES: dict[str, type[BarProvider]] = {
+    "yfinance": YFinanceProvider,
     "yahoo": YahooProvider,
     "stooq": StooqProvider,
     "fred": FredProvider,
@@ -540,10 +626,10 @@ def default_provider_order(symbol: str) -> list[str]:
     if "/" in upper or upper.endswith("USDT"):
         return ["binance", "yahoo"]
     if upper.endswith("=X"):
-        return ["yahoo", "stooq"]
+        return ["yfinance", "yahoo", "stooq"]
     if upper.startswith("^") or upper.endswith("=F"):
-        return ["yahoo", "stooq"]
-    return ["yahoo", "stooq", "tiingo", "polygon", "alphavantage"]
+        return ["yfinance", "yahoo", "stooq"]
+    return ["yfinance", "yahoo", "stooq", "tiingo", "polygon", "alphavantage"]
 
 
 def fetch_bars_any(
@@ -556,7 +642,11 @@ def fetch_bars_any(
 ) -> tuple[pd.DataFrame, str]:
     """Try providers in order; return the first successful frame and its name."""
     if providers is None:
-        providers = [get_provider(name) for name in default_provider_order(symbol) if name in {"yahoo", "stooq", "binance"}]
+        providers = [
+            get_provider(name)
+            for name in default_provider_order(symbol)
+            if name in {"yfinance", "yahoo", "stooq", "binance"}
+        ]
     errors: list[str] = []
     for provider in providers:
         if not provider.available():

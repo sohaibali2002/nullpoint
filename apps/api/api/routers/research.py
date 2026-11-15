@@ -22,6 +22,7 @@ from api.deps import can_write, get_principal
 from api.jobs import create_sprint, enqueue_sprint
 from api.models import (
     Idea,
+    JobAttempt,
     LLMUsage,
     Organization,
     Sprint,
@@ -106,6 +107,31 @@ def get_sprint(
         select(Strategy).where(Strategy.sprint_id == sprint.id).order_by(Strategy.created_at)
     ).scalars()
     return {**sprint_dict(sprint), "strategies": [strategy_dict(s) for s in strategies]}
+
+
+@router.get("/sprints/{sprint_id}/attempts")
+def sprint_attempts(
+    sprint_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> list[dict[str, Any]]:
+    _sprint_or_404(db, principal.org_id, sprint_id)
+    rows = db.execute(
+        select(JobAttempt)
+        .where(JobAttempt.sprint_id == sprint_id)
+        .order_by(JobAttempt.attempt.desc())
+    ).scalars()
+    return [
+        {
+            "attempt": row.attempt,
+            "status": row.status,
+            "transient": row.transient,
+            "error": row.error,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+        }
+        for row in rows
+    ]
 
 
 @router.post("/sprints/{sprint_id}/kill")

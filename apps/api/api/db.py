@@ -40,9 +40,11 @@ class Base(DeclarativeBase):
 
 
 def init_db(target_engine: Engine | None = None) -> None:
-    """Create tables. Idempotent; Alembic can replace this later without schema change."""
+    """Create tables in dev/test. Production schema is owned by Alembic."""
     import api.models  # noqa: F401  (register metadata)
 
+    if not settings.auto_create_schema:
+        return
     Base.metadata.create_all(bind=target_engine or engine)
 
 

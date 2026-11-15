@@ -4,7 +4,7 @@ PY := uv run
 API := $(PY) uvicorn api.main:app --reload --port 8000
 WEB := npm --prefix apps/web run dev
 
-.PHONY: help setup dev api worker web test cov lint type fmt check seed demo tearsheet migrate deploy docker up down clean
+.PHONY: help setup dev api worker web test cov lint type fmt check seed demo tearsheet migrate migrate-create migrate-check deploy sandbox-image docker up down clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}'
@@ -55,8 +55,17 @@ demo: ## Autonomous sprint on SPY/QQQ + sector ETFs, offline-capable
 tearsheet: ## Render HTML tearsheets for promoted strategies into artifacts/
 	$(PY) python scripts/make_tearsheet.py
 
-migrate: ## Apply SQL schema (idempotent; Alembic optional later)
-	$(PY) python -c "from api.db import init_db; init_db()"
+migrate: ## Apply versioned database migrations
+	$(PY) alembic upgrade head
+
+migrate-create: ## Autogenerate a migration after model changes
+	$(PY) alembic revision --autogenerate -m "$(m)"
+
+migrate-check: ## Fail if models and migrations have drifted
+	$(PY) alembic check
+
+sandbox-image: ## Build the sandbox image used for containerised backtests
+	docker build -f sandbox/Dockerfile -t nullpoint-sandbox:latest .
 
 docker: ## Build local images
 	docker compose build

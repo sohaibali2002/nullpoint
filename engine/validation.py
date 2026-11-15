@@ -29,6 +29,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
 
 from engine.base import EngineAdapter, MarketData, TrialCounter, get_adapter
 from engine.metrics import TRADING_DAYS, sharpe_ratio
@@ -45,12 +47,31 @@ GATES = {
     "dsr_min": 0.90,
     "mc_prob_le_zero_max": 0.10,
     "random_entry_p_max": 0.10,
+    "signal_shuffle_p_max": 0.10,
+    "regime_min_sharpe": -0.25,
     "cost_3x_sharpe_min": 0.30,
     "delay_sharpe_min": 0.30,
     "plateau_share_min": 0.40,
     "min_trades": 20,
     "min_years": 1.0,
 }
+
+CRITICAL_GATES: frozenset[str] = frozenset(
+    {
+        "walk_forward_oos_sharpe",
+        "cpcv_median_sharpe",
+        "deflated_sharpe",
+        "pbo",
+        "cost_3x",
+        "lookahead_scan",
+        "future_canary",
+        "same_bar_canary",
+        "monte_carlo_block_bootstrap",
+        "signal_shuffle_null",
+        "minimum_track_record",
+        "regime_robustness",
+    }
+)
 
 
 # --------------------------------------------------------------------- splits
@@ -110,6 +131,15 @@ def combinatorial_purged_cv(
     return splits
 
 
+def contiguous_runs(indices: np.ndarray) -> list[np.ndarray]:
+    """Split an index array into maximal contiguous runs (no stitched gaps)."""
+    ordered = np.sort(np.asarray(indices, dtype=int))
+    if len(ordered) == 0:
+        return []
+    breaks = np.where(np.diff(ordered) != 1)[0] + 1
+    return [run for run in np.split(ordered, breaks) if len(run)]
+
+
 def sealed_holdout_split(n_samples: int, holdout_fraction: float = 0.2) -> dict[str, Any]:
     """Describe the sealed tail. Visible data ends before it; agents never see the tail."""
     if not 0.05 <= holdout_fraction <= 0.5:
@@ -127,7 +157,12 @@ def sealed_holdout_split(n_samples: int, holdout_fraction: float = 0.2) -> dict[
 def probabilistic_sharpe_ratio(
     sr: float, n_obs: int, skew: float = 0.0, kurtosis: float = 3.0, benchmark_sr: float = 0.0
 ) -> float:
-    """P(true Sharpe > benchmark) given non-normal returns (Bailey & Lopez de Prado)."""
+    """P(true Sharpe > benchmark) given non-normal returns (Bailey & Lopez de Prado).
+
+    ``sr`` and ``benchmark_sr`` are **per-period** Sharpe ratios, not annualised ones.
+    Passing an annualised Sharpe here divides the standard error by sqrt(252) and produces a
+    spuriously confident probability.
+    """
     if n_obs < 3 or not np.isfinite(sr):
         return 0.0
     denom = 1.0 - skew * sr + (kurtosis - 1.0) / 4.0 * sr**2
@@ -137,6 +172,22 @@ def probabilistic_sharpe_ratio(
     if sigma <= 0:
         return 0.0
     return float(stats.norm.cdf((sr - benchmark_sr) / sigma))
+
+
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Binomial confidence interval that stays sane at 0/1 and small samples.
+
+    Monte Carlo p-values are proportions of simulated paths; reporting only the point estimate
+    hides how noisy a 200-path null really is.
+    """
+    if n <= 0:
+        return (0.0, 1.0)
+    successes = min(max(int(successes), 0), int(n))
+    p = successes / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2.0 * n)) / denom
+    half = z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n) / denom
+    return (max(0.0, centre - half), min(1.0, centre + half))
 
 
 def expected_max_sharpe(
@@ -163,7 +214,10 @@ def deflated_sharpe_ratio(
     kurtosis: float = 3.0,
     sr_variance: float | None = None,
 ) -> float:
-    """DSR: P(SR exceeds the expected max of ``n_trials`` null draws)."""
+    """DSR: P(SR exceeds the expected max of ``n_trials`` null draws).
+
+    All Sharpe inputs (``sr``, ``sr_variance``) are **per-period** units.
+    """
     sr0 = expected_max_sharpe(n_trials, n_obs, sr_variance)
     return probabilistic_sharpe_ratio(sr, n_obs, skew, kurtosis, benchmark_sr=sr0)
 
@@ -239,6 +293,107 @@ def cscv_pbo(returns_matrix: pd.DataFrame, n_blocks: int = 8) -> PBOResult:
     )
 
 
+def effective_trials(returns_matrix: pd.DataFrame, correlation_threshold: float = 0.70) -> dict[str, Any]:
+    """Count independent trials by clustering the correlation of their return streams.
+
+    Raw trial counts overstate evidence when the grid contains near-duplicates.  Trials whose
+    returns correlate above ``correlation_threshold`` are treated as one effective attempt.
+    """
+    matrix = returns_matrix.replace([np.inf, -np.inf], np.nan).dropna(how="all").fillna(0.0)
+    n_raw = int(matrix.shape[1])
+    if n_raw <= 1 or matrix.shape[0] < 3:
+        return {"n_raw": n_raw, "n_effective": max(1, n_raw), "clusters": [], "threshold": correlation_threshold}
+    corr = matrix.corr().fillna(0.0).clip(-1.0, 1.0)
+    distance = 1.0 - corr.to_numpy()
+    np.fill_diagonal(distance, 0.0)
+    distance = np.clip(distance, 0.0, None)
+    if not np.isfinite(distance).all():
+        return {"n_raw": n_raw, "n_effective": n_raw, "clusters": [], "threshold": correlation_threshold}
+    try:
+        tree = linkage(squareform(distance, checks=False), method="average")
+        labels = fcluster(tree, t=1.0 - correlation_threshold, criterion="distance")
+    except (ValueError, FloatingPointError):  # pragma: no cover - degenerate matrix
+        return {"n_raw": n_raw, "n_effective": n_raw, "clusters": [], "threshold": correlation_threshold}
+    clusters: dict[int, list[str]] = {}
+    for label, column in zip(labels, matrix.columns, strict=True):
+        clusters.setdefault(int(label), []).append(str(column))
+    return {
+        "n_raw": n_raw,
+        "n_effective": len(clusters),
+        "clusters": list(clusters.values()),
+        "threshold": correlation_threshold,
+    }
+
+
+def cpcv_paths(
+    returns_matrix: pd.DataFrame,
+    splits: Sequence[Split],
+    params_by_column: Mapping[Any, dict[str, Any]],
+    *,
+    objective: str = "sharpe",
+    min_train_obs: int = 30,
+    min_test_obs: int = 10,
+) -> dict[str, Any]:
+    """Evaluate CPCV honestly: choose parameters on the train index only.
+
+    The returns matrix already contains a continuous, causal backtest for every candidate, so
+    feature warm-up is preserved and no train/test blocks are stitched together.  For each split
+    the winner is selected from train returns alone; test performance is then measured on each
+    contiguous test run separately, never on a concatenation across a purged gap.
+    """
+    matrix = returns_matrix.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    records: list[dict[str, Any]] = []
+    run_scores: list[float] = []
+    selected: list[dict[str, Any]] = []
+    for split in splits:
+        train_returns = matrix.iloc[split.train]
+        if len(train_returns) < min_train_obs:
+            records.append({"fold": split.fold, "skipped": "insufficient train observations"})
+            continue
+        train_scores = train_returns.apply(sharpe_ratio)
+        if train_scores.empty or not np.isfinite(train_scores.to_numpy()).any():
+            records.append({"fold": split.fold, "skipped": "no finite train score"})
+            continue
+        best_position = int(np.argmax(train_scores.to_numpy(dtype=float)))
+        best_column = train_scores.index[best_position]
+        params = dict(params_by_column.get(best_column, {}))
+        selected.append(params)
+        paths: list[dict[str, Any]] = []
+        for run in contiguous_runs(split.test):
+            if len(run) < min_test_obs:
+                continue
+            value = float(sharpe_ratio(matrix[best_column].iloc[run]))
+            run_scores.append(value)
+            paths.append(
+                {
+                    "start": str(matrix.index[run[0]].date()),
+                    "end": str(matrix.index[run[-1]].date()),
+                    "n_obs": len(run),
+                    "sharpe": value,
+                }
+            )
+        records.append(
+            {
+                "fold": split.fold,
+                "params": params,
+                "train_sharpe": float(train_scores.iloc[best_position]),
+                "paths": paths,
+            }
+        )
+    scores = np.asarray(run_scores, dtype=float)
+    return {
+        "objective": objective,
+        "n_splits": len(splits),
+        "n_paths": len(scores),
+        "median_oos_sharpe": float(np.median(scores)) if len(scores) else 0.0,
+        "p25": float(np.percentile(scores, 25)) if len(scores) else 0.0,
+        "p75": float(np.percentile(scores, 75)) if len(scores) else 0.0,
+        "selected_params": selected,
+        "records": records,
+        "rule": "parameters selected on train returns only; test gaps never stitched",
+    }
+
+
 # ------------------------------------------------------------------- Monte Carlo
 @dataclass
 class MonteCarloResult:
@@ -299,7 +454,11 @@ def block_bootstrap_returns(
         p95=p95,
         prob_le_zero=float(np.mean(sims <= 0.0)),
         p_value=float(np.mean(sims >= observed)),
-        extra={"block": block, "seed": seed},
+        extra={
+            "block": block,
+            "seed": seed,
+            "p_value_ci95": wilson_interval(int(np.sum(sims >= observed)), n_sims),
+        },
     )
 
 
@@ -323,7 +482,11 @@ def trade_bootstrap(
         p95=p95,
         prob_le_zero=float(np.mean(sims <= 0.0)),
         p_value=float(np.mean(sims >= observed)),
-        extra={"n_trades": len(pnls), "seed": seed},
+        extra={
+            "n_trades": len(pnls),
+            "seed": seed,
+            "p_value_ci95": wilson_interval(int(np.sum(sims >= observed)), n_sims),
+        },
     )
 
 
@@ -371,7 +534,11 @@ def random_entry_null(
         p95=p95,
         prob_le_zero=float(np.mean(sims <= 0.0)),
         p_value=float(np.mean(sims >= observed_sharpe)),
-        extra={"holding_period": horizon, "seed": seed},
+        extra={
+            "holding_period": horizon,
+            "seed": seed,
+            "p_value_ci95": wilson_interval(int(np.sum(sims >= observed_sharpe)), n_sims),
+        },
     )
 
 
@@ -383,25 +550,38 @@ def signal_shuffle_null(
     n_sims: int = 300,
     block: int = 20,
     seed: int = 7,
+    costs_bps: float = 3.5,
+    cost_multiplier: float = 1.0,
 ) -> MonteCarloResult:
-    """Block-shuffle the position series: keeps exposure/turnover roughly, destroys timing."""
+    """Placebo null: keep the strategy's exact positions and costs, shuffle return blocks.
+
+    Shuffling positions changes exposure and turnover, which makes the null incomparable.  Here
+    the position path, its exposure and its turnover (and therefore costs) are held fixed; only
+    the alignment between positions and returns is destroyed.  A real timing edge must beat this
+    distribution after paying the same costs.
+    """
     if positions.empty or asset_returns.empty:
         return MonteCarloResult("signal_shuffle", observed_sharpe, 0, 0, 0, 0, 0, 1.0, 1.0)
     n = len(positions)
     block = max(2, min(block, n // 4))
     rng = np.random.default_rng(seed)
     sims = np.empty(n_sims)
-    n_blocks = max(2, n // block)
+    turnover = positions.diff().abs()
+    turnover.iloc[0] = positions.iloc[0].abs()
+    costs = turnover.sum(axis=1) * costs_bps * cost_multiplier / 10_000.0
+    # ceil, not floor: a floor-sized block grid leaves a tail shorter than the position index
+    # and crashes when the shuffled frame is rebuilt.
+    n_blocks = max(2, math.ceil(n / block))
+    offsets = np.arange(block)
+    aligned = asset_returns.reindex(index=positions.index, columns=positions.columns).fillna(0.0)
+    returns_values = aligned.to_numpy(dtype=float)
     for i in range(n_sims):
-        order = rng.permutation(n_blocks)
-        shuffled_parts = []
-        for b in order:
-            start = b * block
-            shuffled_parts.append(positions.iloc[start : start + block])
-        shuffled = pd.concat(shuffled_parts).iloc[:n]
-        shuffled.index = positions.index[: len(shuffled)]
-        gross = (shuffled * asset_returns.reindex_like(shuffled)).sum(axis=1)
-        sims[i] = _fast_sharpe(gross.fillna(0.0).to_numpy())
+        starts = rng.integers(0, n, size=n_blocks)
+        idx = (starts[:, None] + offsets[None, :]).ravel() % n
+        idx = idx[:n]
+        shuffled = pd.DataFrame(returns_values[idx], index=positions.index, columns=positions.columns)
+        gross = (positions.shift(1) * shuffled).sum(axis=1)
+        sims[i] = _fast_sharpe((gross - costs).fillna(0.0).to_numpy())
     mean, p05, p50, p95 = _quantiles(sims)
     return MonteCarloResult(
         method="signal_shuffle",
@@ -413,8 +593,61 @@ def signal_shuffle_null(
         p95=p95,
         prob_le_zero=float(np.mean(sims <= 0.0)),
         p_value=float(np.mean(sims >= observed_sharpe)),
-        extra={"block": block, "seed": seed},
+        extra={
+            "block": block,
+            "seed": seed,
+            "costs_bps": costs_bps,
+            "null_type": "block_shuffled_returns_fixed_positions",
+            "p_value_ci95": wilson_interval(int(np.sum(sims >= observed_sharpe)), n_sims),
+        },
     )
+
+
+def same_bar_dependence_canary(spec: StrategySpec, *, seed: int = 7, n_obs: int = 600) -> dict[str, Any]:
+    """A signal that knows today's return must not earn today's return.
+
+    The canary builds a random-walk asset and a deliberately cheating signal
+    ``sign(close.pct_change())``.  With an honest next-close fill its Sharpe is near zero;
+    with same-bar leakage it approaches the perfect-foresight Sharpe.
+    """
+    rng = np.random.default_rng(seed)
+    returns = rng.normal(0.0, 0.01, n_obs)
+    index = pd.bdate_range("2000-01-03", periods=n_obs)
+    close = pd.DataFrame({"CANARY": 100.0 * np.cumprod(1.0 + returns)}, index=index)
+    cheating = (
+        "def signal(features, params, close):\n"
+        "    r = close.pct_change(fill_method=None).fillna(0.0)\n"
+        "    return (r > 0).astype(float) * 2.0 - 1.0\n"
+    )
+    from engine.base import MarketData
+    from engine.strategy import Costs, RiskRules
+
+    canary_spec = spec.model_copy(
+        update={
+            "universe": ["CANARY"],
+            "features": {},
+            "signal_code": cheating,
+            "rebalance": "daily",
+            "risk": RiskRules(
+                max_position_weight=1.0,
+                max_gross_exposure=1.0,
+                long_short=True,
+                rebalance="daily",
+            ),
+            "costs": Costs(commission_bps=0.0, slippage_bps=0.0, spread_bps=0.0),
+        }
+    )
+    result = get_adapter("native").run_backtest(canary_spec, MarketData(close=close))
+    perfect = sharpe_ratio(pd.Series(np.sign(returns) * returns, index=index))
+    observed = float(result.metrics.get("sharpe", 0.0))
+    threshold = max(2.0, 0.35 * abs(perfect))
+    return {
+        "passed": abs(observed) < threshold,
+        "observed_sharpe": observed,
+        "perfect_foresight_sharpe": perfect,
+        "threshold": threshold,
+        "note": "signal uses the current close; honest execution must delay its PnL by one bar",
+    }
 
 
 # -------------------------------------------------------------- stability etc.
@@ -683,6 +916,9 @@ def validate_strategy(
     mc_sims: int = 300,
     seed: int = 7,
     min_trades: int | None = None,
+    optimizer: str = "grid",
+    tribes_trials: int = 30,
+    warmup_bars: int = 120,
 ) -> ValidationReport:
     """Run the full gauntlet and produce a pass/fail verdict with receipts."""
     adapter = adapter or get_adapter("native")
@@ -695,8 +931,10 @@ def validate_strategy(
     gates: list[Gate] = []
 
     # 1. In-sample grid (also produces the PBO matrix).
+    # Candidate discovery must not silently discard low-turnover strategies before the
+    # track-record gate has had a chance to judge them; the gate below is the real filter.
     grid_result = adapter.run_grid(
-        spec, grid, data, objective="sharpe", trial_counter=trial_counter, min_trades=3
+        spec, grid, data, objective="sharpe", trial_counter=trial_counter, min_trades=1
     )
     best = grid_result.best
     sections["grid"] = {
@@ -721,10 +959,16 @@ def validate_strategy(
                 mode=mode,
                 embargo_bars=embargo,
                 objective="sharpe",
-                min_trades=3,
+                min_trades=1,
                 trial_counter=trial_counter,
+                optimizer=optimizer,
+                max_trials=tribes_trials,
+                warmup_bars=warmup_bars,
+                seed=seed,
             )
-            sections[f"wfo_{mode}"] = wfo.to_dict()
+            wfo_payload = wfo.to_dict()
+            wfo_payload["optimizer"] = optimizer
+            sections[f"wfo_{mode}"] = wfo_payload
             if mode == "rolling":
                 oos_sharpe = float(wfo.metrics.get("sharpe", 0.0))
                 gates.append(
@@ -755,39 +999,27 @@ def validate_strategy(
             sections[f"wfo_{mode}"] = {"error": str(exc)}
             gates.append(_gate(f"walk_forward_{mode}", False, None, "runs", str(exc)))
 
-    # 3. CPCV.
+    # 3. CPCV.  Build the continuous candidate matrix once; parameters are chosen from
+    # train indices only and every test block is scored without stitching purged gaps.
+    matrix = (
+        pd.concat([result.returns.rename(i) for i, result in enumerate(grid_result.results)], axis=1)
+        if grid_result.results
+        else pd.DataFrame()
+    )
+    params_by_column = {i: dict(result.params) for i, result in enumerate(grid_result.results)}
     try:
         splits = combinatorial_purged_cv(len(data.index), cpcv_groups, cpcv_k, embargo)
-        oos_sharpes = []
-        for split in splits:
-            train_close = data.close.iloc[split.train]
-            test_close = data.close.iloc[split.test]
-            if len(train_close) < 40 or len(test_close) < 20:
-                continue
-            test_data = MarketData(
-                close=test_close,
-                benchmark=None if data.benchmark is None else data.benchmark.reindex(test_close.index),
-            )
-            params = best.params
-            result = adapter.run_backtest(spec.with_params(params), test_data, trial_counter=trial_counter)
-            oos_sharpes.append(float(result.metrics.get("sharpe", 0.0)))
-        median = float(np.median(oos_sharpes)) if oos_sharpes else 0.0
-        sections["cpcv"] = {
-            "n_splits": len(splits),
-            "n_evaluated": len(oos_sharpes),
-            "median_oos_sharpe": median,
-            "p25": float(np.percentile(oos_sharpes, 25)) if oos_sharpes else 0.0,
-            "p75": float(np.percentile(oos_sharpes, 75)) if oos_sharpes else 0.0,
-            "k_test": cpcv_k,
-            "n_groups": cpcv_groups,
-        }
+        paths = cpcv_paths(matrix, splits, params_by_column)
+        paths.update({"k_test": cpcv_k, "n_groups": cpcv_groups, "embargo": embargo})
+        sections["cpcv"] = paths
+        median = float(paths["median_oos_sharpe"])
         gates.append(
             _gate(
                 "cpcv_median_sharpe",
                 median >= GATES["cpcv_median_sharpe_min"],
                 median,
                 f">= {GATES['cpcv_median_sharpe_min']}",
-                f"{len(oos_sharpes)} purged CPCV test paths",
+                f"{paths['n_paths']} purged CPCV test paths; train-only selection",
             )
         )
     except ValueError as exc:
@@ -796,7 +1028,6 @@ def validate_strategy(
 
     # 4. PBO across the grid.
     try:
-        matrix = pd.concat([r.returns.rename(i) for i, r in enumerate(grid_result.results)], axis=1)
         pbo = cscv_pbo(matrix)
         sections["pbo"] = pbo.as_dict()
         gates.append(
@@ -806,30 +1037,59 @@ def validate_strategy(
         sections["pbo"] = {"error": str(exc)}
         gates.append(_gate("pbo", False, None, "computed", str(exc)))
 
-    # 5. Deflated Sharpe with the global trial count.
-    n_trials = max(1, trial_counter.value if trial_counter else len(grid_result.results))
+    # 5. Deflated Sharpe in per-period units, using effective independent trials.
+    raw_trials = max(1, trial_counter.value if trial_counter else len(grid_result.results))
+    cluster = effective_trials(matrix)
+    # We can cluster only trials whose return streams are in this matrix.  Historical trials
+    # without stored returns are counted individually rather than assumed correlated; the
+    # alternative lets a large search history disappear from the DSR penalty.
+    unclustered = max(0, raw_trials - int(matrix.shape[1]))
+    n_eff = max(1, int(cluster["n_effective"]) + unclustered)
     observed_sr = float(best.metrics.get("sharpe", 0.0))
+    observed_sr_periodic = observed_sr / math.sqrt(TRADING_DAYS)
     n_obs = int(best.metrics.get("n_periods", 0))
-    sr_var = float(np.var([r.metrics.get("sharpe", 0.0) for r in grid_result.results], ddof=1)) if len(grid_result.results) > 1 else None
+    sr_var = (
+        float(np.var([r.metrics.get("sharpe", 0.0) for r in grid_result.results], ddof=1))
+        if len(grid_result.results) > 1
+        else None
+    )
+    sr_var_periodic = sr_var / TRADING_DAYS if sr_var is not None else None
+    skew = float(best.metrics.get("skew", 0.0))
+    kurtosis = float(best.metrics.get("kurtosis", 3.0)) + 3.0
     dsr = deflated_sharpe_ratio(
-        observed_sr,
-        n_trials,
+        observed_sr_periodic,
+        n_eff,
         n_obs,
-        skew=float(best.metrics.get("skew", 0.0)),
-        kurtosis=float(best.metrics.get("kurtosis", 3.0)) + 3.0,
-        sr_variance=sr_var,
+        skew=skew,
+        kurtosis=kurtosis,
+        sr_variance=sr_var_periodic,
     )
     sections["deflated_sharpe"] = {
         "dsr": dsr,
-        "observed_sharpe": observed_sr,
-        "n_trials": n_trials,
-        "expected_max_sharpe": expected_max_sharpe(n_trials, n_obs, sr_var),
-        "psr_vs_zero": probabilistic_sharpe_ratio(
-            observed_sr, n_obs, float(best.metrics.get("skew", 0.0)), float(best.metrics.get("kurtosis", 3.0)) + 3.0
-        ),
+        "observed_sharpe_annualised": observed_sr,
+        "observed_sharpe_periodic": observed_sr_periodic,
+        "n_trials": raw_trials,
+        "n_trials_raw": raw_trials,
+        "n_trials_effective": n_eff,
+        "n_trials_unclustered": unclustered,
+        "trial_clusters": cluster,
+        "expected_max_sharpe_annualised": expected_max_sharpe(
+            n_eff, n_obs, sr_var_periodic
+        )
+        * math.sqrt(TRADING_DAYS),
+        "psr_vs_zero": probabilistic_sharpe_ratio(observed_sr_periodic, n_obs, skew, kurtosis),
         "trial_source": "counter" if trial_counter is not None else "memory",
+        "units": "per-period; annualised values reported for display only",
     }
-    gates.append(_gate("deflated_sharpe", dsr >= GATES["dsr_min"], dsr, f">= {GATES['dsr_min']}", f"N={n_trials} trials"))
+    gates.append(
+        _gate(
+            "deflated_sharpe",
+            dsr >= GATES["dsr_min"],
+            dsr,
+            f">= {GATES['dsr_min']}",
+            f"N_eff={n_eff} of {raw_trials} recorded trials",
+        )
+    )
 
     # 6. Monte Carlo.
     block_mc = block_bootstrap_returns(best.returns, n_sims=mc_sims, seed=seed)
@@ -862,8 +1122,18 @@ def validate_strategy(
         observed_sr,
         n_sims=max(100, mc_sims // 2),
         seed=seed,
+        costs_bps=spec.costs.per_turnover_bps,
     )
     sections["monte_carlo"]["signal_shuffle"] = shuffle.as_dict()
+    gates.append(
+        _gate(
+            "signal_shuffle_null",
+            shuffle.p_value <= GATES["signal_shuffle_p_max"],
+            shuffle.p_value,
+            f"p <= {GATES['signal_shuffle_p_max']}",
+            "same positions and costs, block-shuffled returns",
+        )
+    )
 
     # 7. Lookahead: static + empirical canary.
     scan = lookahead_scan(spec.signal_code)
@@ -872,16 +1142,30 @@ def validate_strategy(
 
     def _positions_for(frame: pd.DataFrame) -> pd.DataFrame:
         local = MarketData(close=frame)
-        local_result = get_adapter("native").run_backtest(spec.with_params(best.params), local)
+        # Use the same adapter as the rest of validation. With ENGINE_SANDBOX this keeps the
+        # untrusted signal out of the worker process during the canary as well.
+        local_result = adapter.run_backtest(spec.with_params(best.params), local)
         return local_result.positions
 
     canary = future_canary(_positions_for, data.close[spec.universe])
     sections["future_canary"] = canary
     gates.append(_gate("future_canary", canary.get("passed", False), canary.get("max_abs_diff"), "no past change"))
 
+    same_bar = same_bar_dependence_canary(spec, seed=seed)
+    sections["same_bar_canary"] = same_bar
+    gates.append(
+        _gate(
+            "same_bar_canary",
+            bool(same_bar["passed"]),
+            same_bar["observed_sharpe"],
+            f"|SR| < {same_bar['threshold']:.2f}",
+            "oracle signal using today's close must not earn today's return",
+        )
+    )
+
     # 8. Cost & execution stress.
     def _runner(mult: float, delay: int) -> float:
-        stressed = get_adapter("native").run_backtest(
+        stressed = adapter.run_backtest(
             spec.with_params(best.params), data, cost_multiplier=mult, delay_bars=delay
         )
         return float(stressed.metrics.get("sharpe", 0.0))
@@ -931,9 +1215,26 @@ def validate_strategy(
         )
     )
     benchmark = data.benchmark_series(spec.benchmark)
-    sections["regimes"] = regime_analysis(
+    regime = regime_analysis(
         best.returns,
         benchmark if benchmark is not None else data.close[spec.universe].mean(axis=1),
+    )
+    sections["regimes"] = regime
+    usable = [
+        bucket
+        for bucket in regime.get("buckets", [])
+        if bucket.get("n_days", 0) >= 60 and bucket.get("sharpe") is not None
+    ]
+    worst_regime = min((float(b["sharpe"]) for b in usable), default=None)
+    regime_passed = len(usable) >= 4 and worst_regime is not None and worst_regime >= GATES["regime_min_sharpe"]
+    gates.append(
+        _gate(
+            "regime_robustness",
+            regime_passed,
+            worst_regime,
+            f">= {GATES['regime_min_sharpe']} in >= 4 regimes (60+ days each)",
+            "a strategy that only works in one regime is not investable",
+        )
     )
 
     return _finalise(spec, data, gates, sections, trial_counter)
@@ -946,15 +1247,7 @@ def _finalise(
     sections: dict[str, Any],
     trial_counter: TrialCounter | None,
 ) -> ValidationReport:
-    critical = {
-        "walk_forward_oos_sharpe",
-        "deflated_sharpe",
-        "pbo",
-        "cost_3x",
-        "lookahead_scan",
-        "future_canary",
-        "monte_carlo_block_bootstrap",
-    }
+    critical = CRITICAL_GATES
     total = max(1, len(gates))
     passed_count = sum(1 for g in gates if g.passed)
     score = passed_count / total

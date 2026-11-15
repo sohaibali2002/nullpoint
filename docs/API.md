@@ -46,6 +46,8 @@ is no org parameter. Errors use `{"detail": "..."}` with conventional status cod
 | GET | `/strategies/{id}/export?format=python|json|pine` | Honest, approximate Pine |
 | GET | `/strategies/{id}/diff/{other}` | Spec differences |
 | POST | `/strategies/{id}/approve` | `{target:"paper"|"live_ready", note}`; live_ready is a label and is refused 400 |
+| GET | `/strategies/{id}/claim` | Final evidence gate; metrics are withheld until validation, holdout and paper days pass |
+| GET | `/sprints/{id}/attempts` | Durable worker attempt ledger (status, error, heartbeat timing) |
 | GET | `/experiments?strategy_id=` | Ledger |
 | GET | `/experiments/{id}?include_series=true` | Returns/equity/dates |
 

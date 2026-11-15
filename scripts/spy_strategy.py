@@ -25,11 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 from api.db import SessionLocal, init_db
-from api.models import Experiment, Strategy, ValidationReport
+from api.models import Experiment, HoldoutEvaluation, Strategy, ValidationReport
+from sqlalchemy import func, select
 
 from agents.tearsheet import render_tearsheet
 from agents.tools import DBTrialCounter
 from data.lake import DataLake
+from data.providers import YFinanceProvider
 from engine.base import MarketData, get_adapter
 from engine.strategy import Costs, RiskRules, StrategySpec
 from engine.validation import sealed_holdout_split, validate_strategy
@@ -60,16 +62,30 @@ FEATURES = {
 }
 
 
-def load_spy(lake_root: str = "artifacts/lake") -> tuple[pd.DataFrame, dict[str, Any]]:
+def load_spy(lake_root: str = "artifacts/lake", *, refresh: bool = False) -> tuple[pd.DataFrame, dict[str, Any]]:
     lake = DataLake(lake_root)
-    cached = lake.read_bars("yahoo", SYMBOL)
+    cached = None if refresh else lake.read_bars("yfinance", SYMBOL)
     if cached is None:
-        raise SystemExit("SPY is not cached. Run: python -c \"...YahooProvider().fetch_bars(...)\"")
-    frame, _meta = cached
+        frame = YFinanceProvider().fetch_bars(SYMBOL, "1993-01-01", "2026-11-13")
+        lake.write_bars(
+            frame,
+            "yfinance",
+            SYMBOL,
+            interval="1d",
+            extra_meta={
+                "adjusted": True,
+                "source": "yfinance",
+                "licence": "Yahoo Finance via yfinance: personal, non-commercial use only.",
+            },
+        )
+        cached = lake.read_bars("yfinance", SYMBOL)
+    if cached is None:
+        raise SystemExit("SPY could not be loaded from yfinance")
+    frame, meta = cached
     frame = frame.sort_index()
     if "adj_close" in frame.columns:
         frame["close"] = frame["close"].where(frame["close"].notna(), frame["adj_close"])
-    return frame, _meta
+    return frame, meta
 
 
 def build_market_data(frame: pd.DataFrame) -> MarketData:
@@ -82,7 +98,7 @@ def build_market_data(frame: pd.DataFrame) -> MarketData:
         low=frame[["low"]].rename(columns={"low": SYMBOL}) if "low" in frame else None,
         volume=volume,
         benchmark=close[SYMBOL],
-        provider="yahoo",
+        provider="yfinance",
         as_of=str(frame.index.max().date()),
     )
 
@@ -119,9 +135,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build and validate a SPY trend strategy.")
     parser.add_argument("--mc-sims", type=int, default=300)
     parser.add_argument("--lake", default="artifacts/lake")
+    parser.add_argument("--refresh", action="store_true", help="re-download the full history from yfinance")
+    parser.add_argument("--tribes-trials", type=int, default=30)
+    parser.add_argument(
+        "--open-holdout",
+        action="store_true",
+        help="open the sealed tail once, only after a human has reviewed the visible result",
+    )
+    parser.add_argument("--confirm-human", default=None, help="name of the human authorising the holdout")
     args = parser.parse_args()
 
-    frame, _meta = load_spy(args.lake)
+    frame, _meta = load_spy(args.lake, refresh=args.refresh)
     data = build_market_data(frame)
     total = len(data.close)
     split = sealed_holdout_split(total, 0.2)
@@ -143,8 +167,10 @@ def main() -> int:
     )
 
     spec = make_spec()
-    adapter = get_adapter("native")
-    grid = {"lookback": [100, 150, 200], "min_strength": [0.0, 0.25]}
+    # vectorbt is the execution/fill layer; native is used as the cross-check and for the
+    # deterministic canaries inside validation.
+    adapter = get_adapter("vectorbt")
+    grid: dict[str, list[Any]] = {"lookback": [100, 150, 200], "min_strength": [0.0, 0.25]}
 
     init_db()
     session = SessionLocal()
@@ -164,6 +190,8 @@ def main() -> int:
             mc_sims=args.mc_sims,
             seed=7,
             min_trades=50,
+            optimizer="tribes",
+            tribes_trials=args.tribes_trials,
         )
         payload = report.to_dict()
         payload["grid"] = grid
@@ -174,11 +202,17 @@ def main() -> int:
         best = payload.get("sections", {}).get("grid", {}).get("best_params", spec.params)
         scoring_spec = spec.model_copy(update={"params": best})
         visible_result = adapter.run_backtest(scoring_spec, visible)
+        prior_versions = session.execute(
+            select(func.max(Strategy.version)).where(
+                Strategy.org_id == org.id, Strategy.name == spec.name
+            )
+        ).scalar_one_or_none()
+        version = int(prior_versions or 0) + 1
 
         strategy = Strategy(
             org_id=org.id,
             name=spec.name,
-            version=1,
+            version=version,
             status="candidate" if report.passed else "rejected",
             spec=spec.model_dump(mode="json"),
             code=spec.signal_code,
@@ -194,7 +228,7 @@ def main() -> int:
             Experiment(
                 org_id=org.id,
                 strategy_id=strategy.id,
-                strategy_version=1,
+                strategy_version=version,
                 kind="validation",
                 engine=visible_result.engine,
                 params={**best, "grid": grid, "stage": "visible"},
@@ -205,7 +239,7 @@ def main() -> int:
                 data_hash=visible.data_hash(),
                 code_hash=strategy.code_hash,
                 seed=7,
-                env={"python": "3.11+", "provider": "yahoo", "adjusted": True},
+                env={"python": "3.11+", "provider": "yfinance", "engine": "vectorbt", "adjusted": True},
                 trial_index=trial_counter.value,
                 is_oos=True,
                 split={"role": "visible_80pct"},
@@ -224,14 +258,14 @@ def main() -> int:
         session.commit()
 
         dataset_meta = {
-            "provider": "yahoo",
+            "provider": "yfinance",
             "symbol": SYMBOL,
             "synthetic": False,
             "rows": total,
             "start": str(data.index[0].date()),
             "end": str(data.index[-1].date()),
             "adjusted": True,
-            "licence": "Yahoo public endpoints: personal, non-commercial use; no redistribution.",
+            "licence": "Yahoo Finance via yfinance: personal, non-commercial use; no redistribution.",
             "survivorship_note": "SPY is a single surviving ETF; index history before 1993 is not included.",
         }
         tearsheet = render_tearsheet(
@@ -248,14 +282,35 @@ def main() -> int:
         session.commit()
 
         sealed_result = None
-        if report.passed:
+        if report.passed and args.open_holdout:
+            if not args.confirm_human:
+                raise SystemExit("--open-holdout requires --confirm-human '<name>'")
+            already = session.execute(
+                select(HoldoutEvaluation).where(
+                    HoldoutEvaluation.strategy_id == strategy.id,
+                    HoldoutEvaluation.strategy_version == version,
+                )
+            ).scalar_one_or_none()
+            if already is not None:
+                raise SystemExit("this holdout has already been opened; the seal is one-time")
             # Human-triggered final check: open the seal exactly once, on the frozen spec.
             sealed_result = adapter.run_backtest(scoring_spec, sealed)
+            session.add(
+                HoldoutEvaluation(
+                    org_id=org.id,
+                    strategy_id=strategy.id,
+                    strategy_version=version,
+                    opened_by=args.confirm_human,
+                    reason="human-authorised final holdout evaluation",
+                    report_hash=payload["report_hash"],
+                    metrics=sealed_result.metrics,
+                )
+            )
             session.add(
                 Experiment(
                     org_id=org.id,
                     strategy_id=strategy.id,
-                    strategy_version=1,
+                    strategy_version=version,
                     kind="holdout",
                     engine=sealed_result.engine,
                     params=best,
@@ -281,23 +336,27 @@ def main() -> int:
             "trial_index": trial_counter.value,
             "best_params": best,
             "visible_metrics": visible_result.metrics,
-            "sealed_holdout": sealed_result.metrics if sealed_result else "not opened (validation failed)",
+            "sealed_holdout": (
+                sealed_result.metrics
+                if sealed_result
+                else "not opened (validation failed or human review required)"
+            ),
             "validation": {
                 "passed": report.passed,
                 "score": report.score,
                 "recommendation": report.recommendation,
                 "gates": [gate.as_dict() for gate in report.gates],
                 "pbo": payload.get("sections", {}).get("pbo", {}).get("pbo"),
-                "dsr": payload.get("sections", {}).get("dsr", {}).get("dsr"),
+                "dsr": payload.get("sections", {}).get("deflated_sharpe", {}).get("dsr"),
             },
             "dataset": dataset_meta,
             "tearsheet": tearsheet["path"],
             "ai": {
                 "author": "Freebuff agent",
                 "runtime_note": (
-                    "Freebuff CLI 0.2.36 was installed and inspected; it has no headless prompt mode and "
-                    "no signed-in session, so the AI-authored spec ran through the platform engine rather "
-                    "than a CLI LLM call. Set LLM_PROVIDER=anthropic to power the full agent roster."
+                    "The Freebuff CLI 0.2.36 has no headless prompt mode and no signed-in session, "
+                    "so the AI-authored spec ran through the platform engine rather than a CLI LLM call. "
+                    "Set LLM_PROVIDER=anthropic to power the full agent roster."
                 ),
             },
             "disclaimer": "Research only. Not investment advice. Backtests are hypotheses, not forecasts.",
