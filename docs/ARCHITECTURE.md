@@ -37,16 +37,20 @@ flowchart LR
 1. `POST /sprints` validates the objective/universe and creates a `Sprint` row (`queued`).
 2. The API enqueues the job and returns immediately (or runs synchronously in tests).
 3. The orchestrator plans, asks the ideator for hypotheses, and hands each to the quant.
-4. The quant writes `signal(features, params, close)`; the sandbox scans and executes it.
-5. Before code runs, the hypothesis is frozen with a falsifier, critique and trial plan in the
+4. The orchestrator and ideator query the tenant knowledge base (Voyage embeddings, local
+   fallback) and optional Tavily/Exa/Firecrawl deep research before choosing ideas. Sources
+   are advisory evidence; the same validation gates still decide.
+5. The quant writes `signal(features, params, close)`; the sandbox scans and executes it.
+6. Before code runs, the hypothesis is frozen with a falsifier, critique and trial plan in the
    pre-registration funnel; duplicates and over-budget trials are refused.
-6. The backtester runs a parameter grid; every configuration increments the org-wide `TrialCounter`.
-7. The skeptic runs the validation gauntlet. The sealed holdout is hashed before the sprint and is not
+7. The backtester runs a parameter grid in an ordered, hardware-aware pool; every configuration
+   still increments the org-wide `TrialCounter` exactly once.
+8. The skeptic runs the validation gauntlet. The sealed holdout is hashed before the sprint and is not
    readable by agents.
-8. Surviving strategies become `candidate`; failures become `rejected` and still receive a tearsheet.
-9. A performance claim additionally requires the one-time human holdout record and the paper-days
-   gate; until then `GET /strategies/{id}/claim` withholds headline metrics.
-10. The auditor writes messages to `agent_message`; the UI replays them via `/messages` or SSE.
+9. Surviving strategies become `candidate`; failures become `rejected` and still receive a tearsheet.
+10. A performance claim additionally requires the one-time human holdout record and the paper-days
+    gate; until then `GET /strategies/{id}/claim` withholds headline metrics.
+11. The auditor writes messages to `agent_message`; the UI replays them via `/messages` or SSE.
 
 ## Data model (core)
 
@@ -71,6 +75,12 @@ org. IDs are opaque strings generated server-side.
 
 Optional `vectorbt` and `backtesting.py` adapters raise `EngineUnavailable` with an install hint when
 the extra is missing; the native engine is always available.
+
+Grid trials are independent. Engines that can overlap safely (the subprocess sandbox) use the
+ordered pool in `engine/performance.py`; the native pandas engine stays sequential because it is
+GIL-bound, and instead reuses its feature panel and uses a NumPy trade ledger. The pool caps
+concurrency from the cgroup/CPU budget and preserves input order. The DB-backed trial counter is
+updated once per batch, never touched from a worker thread. Data downloads use the same helper.
 
 ## Frontend
 

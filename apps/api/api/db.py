@@ -11,18 +11,34 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from api.config import settings
 
+
+def _sqlalchemy_url(value: str) -> str:
+    """Use the installed psycopg 3 driver for Postgres URLs.
+
+    Neon and other hosted providers hand out ``postgresql://`` URLs, which SQLAlchemy
+    otherwise resolves to psycopg2. The project ships psycopg 3, so make the driver
+    explicit while leaving already-qualified URLs and SQLite untouched.
+    """
+    if value.startswith("postgres://"):
+        return "postgresql+psycopg://" + value[len("postgres://") :]
+    if value.startswith("postgresql://"):
+        return "postgresql+psycopg://" + value[len("postgresql://") :]
+    return value
+
+
+_database_url = _sqlalchemy_url(settings.database_url)
 _connect_args: dict[str, Any] = {}
-if settings.database_url.startswith("sqlite"):
+if _database_url.startswith("sqlite"):
     _connect_args = {"check_same_thread": False}
 
 engine: Engine = create_engine(
-    settings.database_url,
+    _database_url,
     pool_pre_ping=True,
     future=True,
     connect_args=_connect_args,
 )
 
-if settings.database_url.startswith("sqlite"):
+if _database_url.startswith("sqlite"):
 
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_connection: Any, _record: Any) -> None:  # pragma: no cover

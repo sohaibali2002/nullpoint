@@ -75,11 +75,31 @@ class ChatSprintIn(BaseModel):
     message: str = Field(min_length=4, max_length=2000)
 
 
+class ChatThreadIn(BaseModel):
+    agent: str | None = Field(default=None, min_length=2, max_length=40)
+    agents: list[str] = Field(default_factory=list, max_length=5)
+    auto: bool = False
+    title: str | None = Field(default=None, min_length=2, max_length=120)
+
+
+class ChatMessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+    use_web: bool = True
+
+
 class IdeaIn(BaseModel):
     title: str = Field(min_length=4, max_length=200)
     hypothesis: str = Field(min_length=10, max_length=4000)
     family: str = Field(default="cross_sectional", max_length=60)
     tags: list[str] = Field(default_factory=list, max_length=12)
+
+
+class KnowledgeIn(BaseModel):
+    title: str = Field(min_length=4, max_length=200)
+    body: str = Field(min_length=10, max_length=100_000)
+    source: str = Field(default="manual", max_length=120)
+    url: str = Field(default="", max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ApproveIn(BaseModel):

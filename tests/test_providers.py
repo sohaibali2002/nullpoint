@@ -57,6 +57,8 @@ def test_yahoo_parses_and_prefers_adjusted_close():
     frame = provider.fetch_bars("SPY", "2020-01-01", "2020-01-10")
     assert len(frame) == 3
     assert frame["close"].iloc[0] == pytest.approx(50.5)
+    assert frame["high"].iloc[0] == pytest.approx(51.0)
+    assert frame["low"].iloc[0] == pytest.approx(49.5)
     assert frame.attrs["provider"] == "yahoo"
     assert "available_at" in frame.columns
 
@@ -86,6 +88,8 @@ def test_yfinance_provider_parses_and_uses_adjusted_close(monkeypatch):
     out = provider.fetch_bars("SPY", "2020-01-01", "2020-01-10")
     assert len(out) == 2
     assert out["close"].iloc[0] == pytest.approx(50.5)
+    assert out["high"].iloc[0] == pytest.approx(51.0)
+    assert out["low"].iloc[0] == pytest.approx(49.5)
     assert out.attrs["provider"] == "yfinance"
     assert out.attrs["adjusted"] is True
     assert str(out.index[0].date()) == "2020-01-02"

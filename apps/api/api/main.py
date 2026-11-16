@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.config import settings
 from api.db import engine, init_db
-from api.routers import auth, data, portfolio, research, strategies, system
+from api.routers import auth, chat, data, portfolio, research, strategies, system
 from api.routers.system import REQUESTS
 
 log = structlog.get_logger("nullpoint.api")
@@ -127,6 +127,7 @@ app.add_middleware(TelemetryMiddleware)
 
 app.include_router(system.router)
 app.include_router(auth.router)
+app.include_router(chat.router)
 app.include_router(research.router)
 app.include_router(strategies.router)
 app.include_router(data.router)

@@ -12,6 +12,7 @@ Semantics (shared by every adapter where the vendor engine allows it):
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Any, cast
 
@@ -60,7 +61,25 @@ class NativeAdapter(EngineAdapter):
 
         close = data.close[spec.universe]
         benchmark = data.benchmark_series(spec.benchmark)
-        features = build_features(close, spec.features, benchmark=benchmark)
+        benchmark_key = (
+            f"{spec.benchmark}:{len(benchmark)}:{float(benchmark.iloc[0])}:{float(benchmark.iloc[-1])}"
+            if benchmark is not None and len(benchmark)
+            else f"{spec.benchmark}:none"
+        )
+        feature_key = (
+            f"{','.join(spec.universe)}|{json.dumps(spec.features, sort_keys=True)}",
+            benchmark_key,
+        )
+        cached_features = data._feature_cache.get(feature_key)
+        if cached_features is None:
+            built = build_features(close, spec.features, benchmark=benchmark)
+            if len(data._feature_cache) > 8:
+                data._feature_cache.clear()
+            data._feature_cache[feature_key] = built
+            # The signal receives copies: a strategy cannot corrupt the cache for later trials.
+            features = {name: frame.copy() for name, frame in built.items()}
+        else:
+            features = {name: frame.copy() for name, frame in cached_features.items()}
 
         try:
             fn = _compile_cached(spec.signal_code)
@@ -264,11 +283,17 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
     trades: list[Trade] = []
     if positions.empty:
         return trades
-    rets = close.pct_change(fill_method=None).fillna(0.0)
+    # Work in NumPy arrays.  The previous implementation sliced a pandas Series for every
+    # round trip; on a 1,500-bar panel with hundreds of trades that dominated the whole
+    # backtest.  Array slices keep identical arithmetic with a fraction of the overhead.
+    dates = np.asarray(pd.DatetimeIndex(positions.index).strftime("%Y-%m-%d"), dtype=object)
+    return_matrix = np.nan_to_num(
+        close.pct_change(fill_method=None).to_numpy(dtype=float), nan=0.0, posinf=0.0, neginf=0.0
+    )
     for symbol in positions.columns:
         pos = np.asarray(positions[symbol].to_numpy(), dtype=float)
         price_series = np.asarray(close[symbol].to_numpy(), dtype=float).reshape(-1)
-        dates = pd.DatetimeIndex(positions.index)
+        rets = return_matrix[:, cast(int, close.columns.get_loc(symbol))]
         current = 0.0
         entry_i: int | None = None
         for i, wanted in enumerate(pos):
@@ -277,14 +302,14 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
                 entry_i = i
             elif current != 0.0 and (wanted == 0.0 or np.sign(wanted) != np.sign(current)):
                 assert entry_i is not None
-                segment = rets[symbol].iloc[entry_i + 1 : i + 1]
-                growth = float(cast(float, (1.0 + current * segment).prod())) if len(segment) else 1.0
+                segment = rets[entry_i + 1 : i + 1]
+                growth = float(np.prod(1.0 + current * segment)) if segment.size else 1.0
                 trades.append(
                     Trade(
                         symbol=symbol,
                         direction=int(np.sign(current)),
-                        entry_date=str(dates[entry_i].date()),
-                        exit_date=str(dates[i].date()),
+                        entry_date=str(dates[entry_i]),
+                        exit_date=str(dates[i]),
                         entry_price=float(price_series[entry_i]),
                         exit_price=float(price_series[i]),
                         pnl=growth - 1.0,
@@ -294,14 +319,14 @@ def extract_trades(positions: pd.DataFrame, close: pd.DataFrame) -> list[Trade]:
                 current = float(wanted)
                 entry_i = i if wanted != 0.0 else None
         if current != 0.0 and entry_i is not None:
-            segment = rets[symbol].iloc[entry_i + 1 :]
-            growth = float(cast(float, (1.0 + current * segment).prod())) if len(segment) else 1.0
+            segment = rets[entry_i + 1 :]
+            growth = float(np.prod(1.0 + current * segment)) if segment.size else 1.0
             trades.append(
                 Trade(
                     symbol=symbol,
                     direction=int(np.sign(current)),
-                    entry_date=str(dates[entry_i].date()),
-                    exit_date=str(dates[-1].date()),
+                    entry_date=str(dates[entry_i]),
+                    exit_date=str(dates[-1]),
                     entry_price=float(price_series[entry_i]),
                     exit_price=float(price_series[-1]),
                     pnl=growth - 1.0,

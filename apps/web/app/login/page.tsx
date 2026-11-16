@@ -12,8 +12,8 @@ import { api, setToken } from "@/lib/api";
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("quant@example.com");
-  const [password, setPassword] = useState("correct-horse-battery");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [orgName, setOrgName] = useState("Skeptical Capital");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -112,22 +112,24 @@ export default function LoginPage() {
             <label className="block">
               <span className="label">Email</span>
               <input
-                type="email"
-                className="input mt-1.5"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
+                                  type="email"
+                  className="input mt-1.5"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  required
               />
             </label>
             <label className="block">
               <span className="label">Password</span>
               <input
-                type="password"
-                className="input mt-1.5"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
+                                  type="password"
+                  className="input mt-1.5"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  required
+                  minLength={8}
               />
             </label>
             {error && <Notice tone="danger">{error}</Notice>}

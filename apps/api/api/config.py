@@ -39,9 +39,20 @@ class Settings(BaseSettings):
     data_read_only: bool = True
     allow_network: bool = True
 
-    # Agents / LLM
+    # Agents / LLM.  Any OpenAI-compatible endpoint works through LLM_PROVIDER=custom
+    # plus LLM_BASE_URL; named providers pre-fill their public base URL.
     anthropic_api_key: SecretStr | None = None
-    llm_provider: Literal["anthropic", "mock"] = "mock"
+    openai_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    deepseek_api_key: SecretStr | None = None
+    mistral_api_key: SecretStr | None = None
+    xai_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+    llm_api_key: SecretStr | None = None
+    llm_provider: str = "mock"
+    llm_base_url: str | None = None
+    llm_timeout_seconds: float = Field(default=90.0, ge=5, le=600)
     model_orchestrator: str = "claude-opus-5-5"
     model_worker: str = "claude-sonnet-5-5"
     model_cheap: str = "claude-haiku-5-5"
@@ -51,12 +62,28 @@ class Settings(BaseSettings):
     sprint_wall_clock_minutes: int = 45
     max_agent_iterations: int = 3
     max_strategies_per_sprint: int = 6
+    # 0 means auto-detect from CPU/cgroup limits; NULLPOINT_MAX_WORKERS overrides at runtime.
+    max_workers: int = Field(default=0, ge=0, le=64)
     job_runner: Literal["auto", "arq", "subprocess", "sync"] = "auto"
     job_max_attempts: int = Field(default=3, ge=1, le=10)
     job_stale_minutes: int = Field(default=120, ge=5, le=1440)
     auto_create_schema: bool = True
     min_paper_days: int = Field(default=30, ge=1, le=365)
     artifacts_dir: Path = Path("artifacts")
+
+    # Research: Voyage knowledge base + web search (all optional; offline fallback is real)
+    voyage_api_key: SecretStr | None = None
+    voyage_model: str = "voyage-3-large"
+    voyage_base_url: str = "https://api.voyageai.com/v1/embeddings"
+    knowledge_chunk_chars: int = Field(default=1400, ge=200, le=8000)
+    tavily_api_key: SecretStr | None = None
+    exa_api_key: SecretStr | None = None
+    firecrawl_api_key: SecretStr | None = None
+    # Comma-separated so a plain .env value works without JSON decoding.
+    web_search_providers: str = "tavily,exa,firecrawl"
+    web_search_max_results: int = Field(default=6, ge=1, le=20)
+    web_search_timeout_seconds: float = Field(default=25.0, ge=5, le=120)
+    web_search_cache_ttl_seconds: float = Field(default=900.0, ge=0, le=86400)
 
     # Data providers (all free tiers)
     yfinance_enabled: bool = True
@@ -106,7 +133,7 @@ class Settings(BaseSettings):
 
     @field_validator("cors_origins", mode="before")
     @classmethod
-    def _split_origins(cls, value: object) -> object:
+    def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [v.strip() for v in value.split(",") if v.strip()]
         return value
@@ -142,6 +169,42 @@ class Settings(BaseSettings):
     @property
     def anthropic_key(self) -> str | None:
         return self.anthropic_api_key.get_secret_value() if self.anthropic_api_key else None
+
+    @property
+    def llm_key(self) -> str | None:
+        """The key for the selected provider, with LLM_API_KEY as the generic override."""
+        if self.llm_api_key:
+            return self.llm_api_key.get_secret_value()
+        provider = self.llm_provider.strip().lower()
+        mapping = {
+            "anthropic": self.anthropic_api_key,
+            "openai": self.openai_api_key,
+            "openrouter": self.openrouter_api_key,
+            "groq": self.groq_api_key,
+            "deepseek": self.deepseek_api_key,
+            "mistral": self.mistral_api_key,
+            "xai": self.xai_api_key,
+            "gemini": self.gemini_api_key,
+            "google": self.gemini_api_key,
+        }
+        secret = mapping.get(provider)
+        return secret.get_secret_value() if secret else None
+
+    @property
+    def voyage_key(self) -> str | None:
+        return self.voyage_api_key.get_secret_value() if self.voyage_api_key else None
+
+    @property
+    def search_providers(self) -> list[str]:
+        return [part.strip().lower() for part in self.web_search_providers.split(",") if part.strip()]
+
+    @property
+    def search_keys(self) -> dict[str, str | None]:
+        return {
+            "tavily": self.tavily_api_key.get_secret_value() if self.tavily_api_key else None,
+            "exa": self.exa_api_key.get_secret_value() if self.exa_api_key else None,
+            "firecrawl": self.firecrawl_api_key.get_secret_value() if self.firecrawl_api_key else None,
+        }
 
 
 @lru_cache(maxsize=1)

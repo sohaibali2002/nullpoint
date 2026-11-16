@@ -21,6 +21,7 @@ from data.lake import DataLake
 from data.providers import get_provider
 from data.quality import check_ohlcv
 from engine.base import MarketData
+from engine.performance import parallel_map
 
 DEFAULT_START = "2016-01-01"
 DEFAULT_END = str(datetime.now(UTC).date())
@@ -98,6 +99,8 @@ def _fetch_symbol(
                     "1d",
                     partial(provider.fetch_bars, symbol, start, end),
                     ttl_hours=cache_ttl_hours,
+                    start=start,
+                    end=end,
                 )
             else:
                 frame = provider.fetch_bars(symbol, start, end)
@@ -120,6 +123,7 @@ def load_universe(
     cache_ttl_hours: float = 24.0,
     benchmark: str | None = None,
     synthetic: bool = False,
+    max_workers: int | None = None,
 ) -> Dataset:
     """Load a validated close panel; falls back to labelled synthetic data if necessary."""
     symbols = [s.upper() for s in symbols]
@@ -134,13 +138,35 @@ def load_universe(
         closes: dict[str, pd.Series] = {}
         providers: set[str] = set()
         failures: list[str] = []
-        for symbol in symbols:
+
+        def fetch_one(symbol: str) -> dict[str, Any]:
             try:
                 frame, provider_name = _fetch_symbol(symbol, start, end, lake, cache_ttl_hours)
+                report = check_ohlcv(frame, symbol, provider_name)
+                return {
+                    "symbol": symbol,
+                    "frame": frame,
+                    "provider": provider_name,
+                    "report": report,
+                    "path": str(lake.path_for(provider_name, symbol)) if lake is not None else "",
+                }
             except Exception as exc:
-                failures.append(f"{symbol}: {exc}")
+                return {"symbol": symbol, "error": f"{type(exc).__name__}: {exc}"}
+
+        # Symbols are independent network calls.  Fetch them concurrently, bounded by the
+        # detected CPU/cgroup budget, and process the outcomes in the caller's order.
+        for outcome in parallel_map(
+            fetch_one,
+            symbols,
+            max_workers=max_workers if max_workers else min(len(symbols), 8),
+        ):
+            symbol = str(outcome["symbol"])
+            if "error" in outcome:
+                failures.append(f"{symbol}: {outcome['error']}")
                 continue
-            report = check_ohlcv(frame, symbol, provider_name)
+            frame = outcome["frame"]
+            provider_name = str(outcome["provider"])
+            report = outcome["report"]
             quality.append(report.as_dict())
             warnings.extend(f"{symbol}: {w}" for w in report.warnings)
             if not report.passed:
@@ -150,8 +176,8 @@ def load_universe(
             if "volume" in frame.columns:
                 volumes[symbol] = frame["volume"].rename(symbol).fillna(0.0)
             providers.add(provider_name)
-            if lake is not None:
-                lake_paths.append(str(lake.path_for(provider_name, symbol)))
+            if outcome.get("path"):
+                lake_paths.append(str(outcome["path"]))
         if len(closes) == len(symbols) and closes:
             panel = pd.concat(closes.values(), axis=1).sort_index()
             panel = panel.ffill(limit=5)

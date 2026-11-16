@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
+import zipfile
 from collections.abc import AsyncIterator
+from html.parser import HTMLParser
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pypdf import PdfReader
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agents.bus import MessageBus
+from agents.knowledge import KnowledgeBase
 from agents.orchestrator import SprintRunner
 from agents.roster import roster_payload
 from api.config import settings
@@ -24,13 +29,14 @@ from api.models import (
     Idea,
     JobAttempt,
     LLMUsage,
+    Memory,
     Organization,
     Sprint,
     Strategy,
     StrategyStatus,
     TrialCounter,
 )
-from api.schemas import ChatSprintIn, IdeaIn, SprintIn
+from api.schemas import ChatSprintIn, IdeaIn, KnowledgeIn, SprintIn
 from api.security import Principal
 from api.services.alerts import dispatch
 from api.services.serializers import idea_dict, sprint_dict, strategy_dict
@@ -381,3 +387,154 @@ def create_idea(
     db.commit()
     db.refresh(idea)
     return {**idea_dict(idea), "duplicate_warning": duplicate, "similarity": round(score, 3)}
+
+
+# ------------------------------------------------------------------ knowledge
+
+def _knowledge_base(db: Session, org_id: str) -> KnowledgeBase:
+    return KnowledgeBase(
+        db,
+        org_id,
+        api_key=settings.voyage_key if settings.allow_network else None,
+        model=settings.voyage_model,
+        base_url=settings.voyage_base_url,
+        chunk_chars=settings.knowledge_chunk_chars,
+    )
+
+
+@router.get("/knowledge")
+def knowledge_stats(
+    db: Session = Depends(get_db), principal: Principal = Depends(get_principal)
+) -> dict[str, Any]:
+    return _knowledge_base(db, principal.org_id).stats()
+
+
+@router.get("/memory")
+def memory_feed(
+    db: Session = Depends(get_db), principal: Principal = Depends(get_principal)
+) -> dict[str, Any]:
+    """Recent lessons the desk will recall automatically in the next conversation."""
+    rows = (
+        db.execute(
+            select(Memory)
+            .where(Memory.org_id == principal.org_id, Memory.kind != "knowledge")
+            .order_by(Memory.created_at.desc())
+            .limit(20)
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "kind": row.kind,
+                "title": row.title,
+                "body": row.body[:600],
+                "thread_id": (row.payload or {}).get("thread_id"),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/knowledge", status_code=201)
+def add_knowledge(
+    payload: KnowledgeIn,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    if not can_write(principal):
+        raise HTTPException(status_code=403, detail="viewer role cannot add knowledge")
+    return _knowledge_base(db, principal.org_id).add(
+        payload.title,
+        payload.body,
+        source=payload.source,
+        url=payload.url,
+        tags=payload.tags,
+    )
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if text:
+            self.parts.append(text)
+
+
+def _book_text(filename: str, data: bytes) -> str:
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if suffix in {"txt", "md", "markdown", "text"}:
+        return data.decode("utf-8", errors="replace")
+    if suffix == "pdf":
+        reader = PdfReader(io.BytesIO(data))
+        return "\n\n".join((page.extract_text() or "") for page in reader.pages)
+    if suffix == "epub":
+        chunks: list[str] = []
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in sorted(archive.namelist()):
+                if not name.lower().endswith((".xhtml", ".html", ".htm")):
+                    continue
+                parser = _TextExtractor()
+                parser.feed(archive.read(name).decode("utf-8", errors="replace"))
+                if parser.parts:
+                    chunks.append(" ".join(parser.parts))
+        return "\n\n".join(chunks)
+    raise HTTPException(
+        status_code=415,
+        detail="supported uploads are PDF, EPUB, TXT and Markdown. Convert other formats first.",
+    )
+
+
+@router.post("/knowledge/upload", status_code=201)
+async def upload_knowledge(
+    file: UploadFile = File(...),
+    title: str = Form(default=""),
+    tags: str = Form(default="upload"),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Upload a document the operator has the right to use.
+
+    The file is parsed in memory and only extracted text is stored; the original file is not
+    retained. Full books are capped to keep one request inside the serverless budget.
+    """
+    if not can_write(principal):
+        raise HTTPException(status_code=403, detail="viewer role cannot upload knowledge")
+    filename = (file.filename or "upload.txt").rsplit("/", 1)[-1]
+    data = await file.read()
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file is larger than 12 MB")
+    text = _book_text(filename, data).strip()
+    if len(text) < 40:
+        raise HTTPException(status_code=400, detail="the file contains too little extractable text")
+    text = text[:500_000]
+    title_value = (title.strip() or filename.rsplit(".", 1)[0]).strip()[:200]
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()][:20]
+    return _knowledge_base(db, principal.org_id).add(
+        title_value,
+        text,
+        source="upload",
+        url="",
+        tags=tag_list,
+        metadata={"filename": filename, "uploaded_by": principal.user_id},
+    )
+
+
+@router.get("/knowledge/search")
+def search_knowledge(
+    q: str = Query(min_length=2, max_length=500),
+    limit: int = Query(default=6, ge=1, le=20),
+    tags: str = Query(default="", max_length=200),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    hits = _knowledge_base(db, principal.org_id).search(q, limit=limit, tags=tag_list)
+    return {"query": q, "hits": hits, "count": len(hits)}

@@ -52,6 +52,89 @@ export interface Message {
   created_at: string;
 }
 
+export interface ChatBlock {
+  type: "brief" | "evidence" | string;
+  sections?: Array<{ heading: string; body: string }>;
+  count?: number;
+  providers?: string[];
+}
+
+export interface KnowledgeStats {
+  documents: number;
+  chunks: number;
+  library_chunks: number;
+  embedding_models: string[];
+  voyage_configured: boolean;
+}
+
+export interface KnowledgeHit {
+  id: string;
+  title: string;
+  snippet: string;
+  score: number;
+  source: string;
+  url: string;
+  tags: string[];
+  chunk_index: number;
+  embedding_model: string;
+}
+
+export interface MemoryItem {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  thread_id: string | null;
+  created_at: string | null;
+}
+
+export interface ChatSource {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  provider: string;
+  score?: number;
+  published?: string | null;
+}
+
+export interface ChatThread {
+  id: string;
+  title: string;
+  agent: string;
+  agent_name: string;
+  purpose: string;
+  mode: "solo" | "room" | string;
+  participants: string[];
+  participant_names: string[];
+  created_at: string | null;
+  updated_at: string | null;
+  last_message: string | null;
+  message_count: number;
+}
+
+export interface ChatTurn {
+  id: string;
+  thread_id: string;
+  role: "user" | "assistant" | string;
+  content: string;
+  agent: string;
+  agent_name: string;
+  kind: "message" | "evidence" | "analysis" | "synthesis" | string;
+  ui: ChatBlock[];
+  sources: ChatSource[];
+  model: string | null;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  created_at: string | null;
+}
+
+export interface ChatThreadDetail {
+  thread: ChatThread;
+  messages: ChatTurn[];
+}
+
 export interface Gate {
   name: string;
   passed: boolean;

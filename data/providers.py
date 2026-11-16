@@ -27,6 +27,28 @@ from data.base import (
 )
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+
+def _apply_adjusted_ohlc(frame: pd.DataFrame, adj_close: Any = None) -> pd.DataFrame:
+    """Put OHLC on the same total-return basis.
+
+    Yahoo reports raw open/high/low but a dividend-adjusted close. Replacing only close produces
+    impossible bars where the adjusted close sits below the raw low. Scale the whole OHLC row by
+    the adjustment factor so quality checks and the engine see a consistent series.
+    """
+    if adj_close is not None:
+        frame["adj_close"] = adj_close
+    if "adj_close" not in frame or "close" not in frame:
+        return frame
+    raw_close = pd.to_numeric(frame["close"], errors="coerce")
+    adjusted = pd.to_numeric(frame["adj_close"], errors="coerce")
+    factor = (adjusted / raw_close).replace([np.inf, -np.inf], np.nan)
+    valid = factor.notna() & (factor > 0)
+    for column in ("open", "high", "low"):
+        if column in frame:
+            frame.loc[valid, column] = pd.to_numeric(frame.loc[valid, column], errors="coerce") * factor[valid]
+    frame.loc[valid, "close"] = adjusted[valid]
+    return frame
 STOOQ_URL = "https://stooq.com/q/d/l/"
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 AV_URL = "https://www.alphavantage.co/query"
@@ -90,9 +112,8 @@ class YahooProvider(BarProvider):
             },
             index=pd.to_datetime(timestamps, unit="s", utc=True).tz_convert(None),
         )
-        if adj is not None and len(adj) == len(frame):
-            frame["adj_close"] = adj
-            frame["close"] = np.where(pd.notna(adj), adj, frame["close"])
+        aligned_adj = adj if adj is not None and len(adj) == len(frame) else None
+        frame = _apply_adjusted_ohlc(frame, aligned_adj)
         out = normalize_bars(frame, provider="yahoo", symbol=symbol, interval=interval, adjusted=True)
         return out
 
@@ -166,8 +187,7 @@ class YFinanceProvider(BarProvider):
             }
         )
         frame = frame[[c for c in ("open", "high", "low", "close", "adj_close", "volume") if c in frame]]
-        if "adj_close" in frame and frame["adj_close"].notna().any():
-            frame["close"] = frame["adj_close"].where(frame["adj_close"].notna(), frame["close"])
+        frame = _apply_adjusted_ohlc(frame)
         index = pd.DatetimeIndex(frame.index)
         if index.tz is not None:
             index = index.tz_convert(None)

@@ -56,6 +56,79 @@ interface ApiState {
   error: string | null;
 }
 
+export async function uploadKnowledge(form: FormData): Promise<any> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch("/api/knowledge/upload", { method: "POST", headers, body: form });
+  const text = await response.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = { detail: text };
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, body?.detail ?? `Upload failed (${response.status})`);
+  }
+  return body;
+}
+
+export async function streamChat(
+  path: string,
+  payload: Record<string, unknown>,
+  onEvent: (event: string, data: any) => void,
+): Promise<void> {
+  const token = getToken();
+  const response = await fetch(`/api${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let detail = text || `Request failed (${response.status})`;
+    try {
+      detail = JSON.parse(text)?.detail ?? detail;
+    } catch {
+      // Keep the raw response when it is not JSON.
+    }
+    throw new ApiError(response.status, String(detail));
+  }
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7).trim();
+        else if (line.startsWith("data: ")) dataLines.push(line.slice(6));
+      }
+      if (dataLines.length) {
+        try {
+          onEvent(event, JSON.parse(dataLines.join("\n")));
+        } catch {
+          onEvent(event, { detail: dataLines.join("\n") });
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export function useApi<T>(path: string | null, fallback: T) {
   const [data, setData] = useState<T>(fallback);
   const [state, setState] = useState<ApiState>({ loading: true, demo: false, error: null });

@@ -33,7 +33,7 @@ ORCHESTRATOR = AgentSpec(
     system_prompt=VOICE
     + " You are the research lead. Design a diverse sprint, cap the number of ideas, and kill weak "
     "lines of work early. You never approve a live-trading action.",
-    tools=("load_data", "list_ideas", "recall"),
+    tools=("load_data", "list_ideas", "recall", "knowledge_search", "web_search", "deep_research"),
 )
 
 IDEATOR = AgentSpec(
@@ -44,7 +44,7 @@ IDEATOR = AgentSpec(
     system_prompt=VOICE
     + " You propose testable hypotheses, each with an economic mechanism and a falsifiable prediction. "
     "Do not propose ideas already in the registry or lessons the librarian says have failed.",
-    tools=("list_ideas", "recall", "record_idea"),
+    tools=("list_ideas", "recall", "record_idea", "knowledge_search", "web_search", "deep_research"),
 )
 
 DATA_ENGINEER = AgentSpec(
@@ -55,7 +55,7 @@ DATA_ENGINEER = AgentSpec(
     system_prompt=VOICE
     + " You are responsible for data integrity. Report every quality warning to the desk and never "
     "hide synthetic or stale data.",
-    tools=("load_data",),
+    tools=("load_data", "knowledge_search"),
 )
 
 CODER = AgentSpec(
@@ -66,7 +66,7 @@ CODER = AgentSpec(
     system_prompt=VOICE
     + " You write simple, point-in-time-safe pandas/numpy signal code. No future data, no I/O, no "
     "randomness, no hidden state. Size positions through risk rules, not leverage in the signal.",
-    tools=("scan_code",),
+    tools=("scan_code", "knowledge_search"),
 )
 
 BACKTESTER = AgentSpec(
@@ -88,7 +88,7 @@ SKEPTIC = AgentSpec(
     system_prompt=VOICE
     + " Your job is to falsify. Assume the result is an artifact until the validation gates pass. "
     "Name the specific gate or mechanism that fails, and never soften a rejection.",
-    tools=("validate", "grid", "scan_code"),
+    tools=("validate", "grid", "scan_code", "knowledge_search", "web_search"),
 )
 
 RISK = AgentSpec(
@@ -130,7 +130,7 @@ LIBRARIAN = AgentSpec(
     purpose="Long-term memory: what worked, what failed and why, fed back to the Ideator.",
     system_prompt=VOICE
     + " You keep the memory honest. Record failures with their mechanism, not just their metrics.",
-    tools=("remember", "recall"),
+    tools=("remember", "recall", "knowledge_add", "knowledge_search", "knowledge_stats"),
 )
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -173,9 +173,11 @@ class OrchestratorAgent:
     def plan(self, objective: str, universe: list[str], max_strategies: int) -> dict[str, Any]:
         families = ["cross_sectional", "mean_reversion", "trend", "defensive", "regime", "seasonality"]
         prior = self.ctx.invoke(self.spec, "recall", query=objective, limit=5)
+        knowledge = self.ctx.invoke(self.spec, "knowledge_search", query=objective, limit=5)
         narrative = self.ctx.narrate(
             self.spec,
             f"Sprint objective: {objective}\nUniverse: {universe}\nPrior lessons: {prior}\n"
+            f"Knowledge-base evidence: {knowledge}\n"
             f"Plan at most {max_strategies} strategies across these families: {families}.",
         )
         return {
@@ -187,6 +189,7 @@ class OrchestratorAgent:
             "budget_usd": self.ctx.budget.budget_usd,
             "narrative": narrative,
             "prior_lessons": prior,
+            "knowledge": knowledge,
             "policy": "research-only; candidate status requires human approval before paper trading",
         }
 
@@ -200,6 +203,19 @@ class IdeatorAgent:
     def propose(self, objective: str, count: int) -> list[dict[str, Any]]:
         existing = self.ctx.invoke(self.spec, "list_ideas", limit=100)
         lessons = self.ctx.invoke(self.spec, "recall", query="failed rejected overfit", limit=8)
+        # Deep research is deliberately best-effort: no keys or no network must not stop the
+        # deterministic research loop.  The evidence is attached to every resulting proposal
+        # so the coder/skeptic can see why the idea was promoted now.
+        research: dict[str, Any] = {}
+        try:
+            research = self.ctx.invoke(self.spec, "deep_research", query=objective, max_results=8)
+        except Exception as exc:
+            self.ctx.bus.emit(self.spec.key, f"Research tools unavailable: {type(exc).__name__}: {exc}.")
+        evidence = [
+            f"{hit.get('title', '')} ({hit.get('url', '')})"
+            for hit in (research.get("hits", []) + research.get("knowledge", []))[:3]
+            if hit.get("title")
+        ]
         failed_keys = {str(item.get("title", "")) for item in lessons}
         templates = list(TEMPLATES.values())
         lowered = objective.lower()
@@ -216,6 +232,9 @@ class IdeatorAgent:
             if len(proposals) >= count:
                 break
             variant = _variant(template, len(existing) + len(proposals))
+            rationale = template.rationale
+            if evidence:
+                rationale = f"{rationale} Research context: " + "; ".join(evidence)
             proposals.append(
                 {
                     "template_key": template.key,
@@ -223,14 +242,18 @@ class IdeatorAgent:
                     "hypothesis": template.hypothesis,
                     "family": template.family,
                     "tags": list(template.tags),
-                    "rationale": template.rationale,
+                    "rationale": rationale,
                     "params": variant,
+                    "research": {
+                        "sources": research.get("hits", [])[:5],
+                        "knowledge": research.get("knowledge", [])[:5],
+                    },
                 }
             )
         text = self.ctx.narrate(
             self.spec,
             f"Objective: {objective}\nExisting ideas: {len(existing)}\nLessons: {lessons}\n"
-            f"Proposed: {[p['title'] for p in proposals]}",
+            f"Research evidence: {evidence}\nProposed: {[p['title'] for p in proposals]}",
         )
         for proposal in proposals:
             proposal["narrative"] = text

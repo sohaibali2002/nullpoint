@@ -919,6 +919,7 @@ def validate_strategy(
     optimizer: str = "grid",
     tribes_trials: int = 30,
     warmup_bars: int = 120,
+    max_workers: int | None = None,
 ) -> ValidationReport:
     """Run the full gauntlet and produce a pass/fail verdict with receipts."""
     adapter = adapter or get_adapter("native")
@@ -934,7 +935,13 @@ def validate_strategy(
     # Candidate discovery must not silently discard low-turnover strategies before the
     # track-record gate has had a chance to judge them; the gate below is the real filter.
     grid_result = adapter.run_grid(
-        spec, grid, data, objective="sharpe", trial_counter=trial_counter, min_trades=1
+        spec,
+        grid,
+        data,
+        objective="sharpe",
+        trial_counter=trial_counter,
+        min_trades=1,
+        max_workers=max_workers,
     )
     best = grid_result.best
     sections["grid"] = {
@@ -965,6 +972,7 @@ def validate_strategy(
                 max_trials=tribes_trials,
                 warmup_bars=warmup_bars,
                 seed=seed,
+                max_workers=max_workers,
             )
             wfo_payload = wfo.to_dict()
             wfo_payload["optimizer"] = optimizer

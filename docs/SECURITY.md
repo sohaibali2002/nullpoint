@@ -40,6 +40,11 @@ Agent-written strategy code is untrusted.
 - Provider/LLM keys are read from the environment (pydantic settings, secret types) and never returned
   by the API. `/settings` exposes presence only (`safe_secret`).
 - `.env` is gitignored; `.env.example` contains placeholders.
+- Voyage, Tavily, Exa and Firecrawl keys live only in the server environment. Search and
+  knowledge results are untrusted external content: they are evidence for agents, never
+  instructions, and they never bypass validation or the trial counter.
+- `ALLOW_NETWORK=false` disables web research; the knowledge base still uses its local
+  embedding fallback, so offline demos remain reproducible.
 - Logs redact authorization headers and do not log message bodies containing keys.
 - Frontend never receives provider credentials. It only holds the user's JWT in `localStorage`.
 

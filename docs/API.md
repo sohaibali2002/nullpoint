@@ -32,6 +32,9 @@ is no org parameter. Errors use `{"detail": "..."}` with conventional status cod
 | GET | `/dashboard` | Counts, recent sprints, leaderboard, roster, safety flags |
 | GET | `/agents` | Roster + model slots |
 | GET | `/ideas` · POST `/ideas` | List / record with embedding dedupe warning |
+| GET | `/knowledge` | Knowledge-base document/chunk stats and embedding model |
+| POST | `/knowledge` | `{title,body,source,url,tags}`; chunks + Voyage/local embeddings |
+| GET | `/knowledge/search?q=&limit=&tags=` | Semantic tenant-scoped knowledge search |
 
 ## Strategies & experiments
 
@@ -82,7 +85,7 @@ is no org parameter. Errors use `{"detail": "..."}` with conventional status cod
 | GET | `/usage` | 30-day spend by model, trials, cost/candidate |
 | GET | `/alerts` · POST `/alerts/test` | Delivery log; unconfigured channels are recorded skipped |
 | GET | `/safety` | Capabilities and limits |
-| GET | `/models` | Configured slots and budget prices |
+| GET | `/models` | Configured slots, supported LLM providers and budget prices |
 | GET | `/` | Brand, version, endpoint map, disclaimer |
 
 ## Examples

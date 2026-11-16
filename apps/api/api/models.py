@@ -263,6 +263,53 @@ class AgentMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ChatThread(Base):
+    """A persistent conversation with one member of the agent roster."""
+
+    __tablename__ = "chat_thread"
+    __table_args__ = (Index("ix_chat_thread_org_updated", "org_id", "updated_at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), index=True)
+    agent: Mapped[str] = mapped_column(String(40), default="orchestrator")
+    mode: Mapped[str] = mapped_column(String(16), default="solo")  # solo|room|auto
+    participants: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_count: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(160), default="New conversation")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    messages: Mapped[list[ChatMessage]] = relationship(
+        "ChatMessage",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_message"
+    __table_args__ = (Index("ix_chat_message_thread_created", "thread_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("chat_thread.id", ondelete="CASCADE"), index=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organization.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")  # user|assistant
+    agent: Mapped[str] = mapped_column(String(40), default="orchestrator")
+    kind: Mapped[str] = mapped_column(String(24), default="message")  # message|evidence|analysis|synthesis
+    sources: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
+    content: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str | None] = mapped_column(String(60))
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    thread: Mapped[ChatThread] = relationship("ChatThread", back_populates="messages")
+
+
 class TrialCounter(Base):
     __tablename__ = "trial_counter"
     __table_args__ = (UniqueConstraint("org_id", "scope", name="uq_trial_org_scope"),)

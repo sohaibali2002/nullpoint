@@ -161,6 +161,30 @@ pretending missing evidence is a pass.
 - **Typed research artifacts.** Proposals are frozen with a hypothesis, falsifier, critique and trial
   plan before code runs; the funnel prevents duplicate pre-registration and over-budget trials.
 - **Staging.** `infra/fly.staging.toml` is a separate app/database/Redis/lake configuration.
+- **Performance.** Symbol downloads run concurrently. The native engine reuses its feature
+  panel across parameter trials and extracts trades in NumPy instead of per-trade pandas
+  slicing; subprocess/sandbox grids can also overlap via an ordered, hardware-aware pool.
+  `NULLPOINT_MAX_WORKERS` or `MAX_WORKERS` caps concurrency; `1` forces deterministic
+  sequential execution. The pool never receives the DB session, so trial accounting stays
+  thread-safe and is committed once per batch.
+
+## Research tools and providers
+
+- **Any LLM API.** `LLM_PROVIDER` accepts `mock`, `anthropic`, and OpenAI-compatible
+  providers (`openai`, `openrouter`, `groq`, `deepseek`, `mistral`, `xai`, `together`,
+  `fireworks`, `gemini`, `ollama`) or `custom` with `LLM_BASE_URL`. This includes Azure
+  OpenAI, vLLM, LM Studio and local models. `LLM_API_KEY` is the generic key; provider
+  aliases such as `OPENROUTER_API_KEY` also work.
+- **Voyage knowledge base.** Agents can add documents and retrieve grounded passages;
+  chunks live in the tenant-scoped `memory` table. Without `VOYAGE_API_KEY` the deterministic
+  local embedding is used, and every hit records which embedding model produced it.
+- **Deep web research.** Tavily, Exa and Firecrawl are queried concurrently behind one
+  normalised interface, with URL de-duplication and a TTL cache. `deep_research` expands one
+  question into mechanism, evidence, market and failure-mode queries, then merges the results
+  with the knowledge base. Without keys or network access it returns an explicit error rather
+  than inventing sources.
+- **Tool boundaries.** The Ideator, Orchestrator, Coder, Skeptic and Librarian have narrow
+  whitelists for research and knowledge tools; all calls are written to the sprint audit trail.
 
 ## Quality gates
 
@@ -180,8 +204,12 @@ See `.env.example`. Important variables:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | sqlite in dev | Postgres in production (`postgresql+psycopg://…`) |
-| `LLM_PROVIDER` | `mock` | `mock` or `anthropic` |
+| `LLM_PROVIDER` | `mock` | `mock`, `anthropic`, an OpenAI-compatible provider, or `custom` |
+| `LLM_API_KEY` / `LLM_BASE_URL` | — | generic key and optional OpenAI-compatible base URL |
 | `MODEL_ORCHESTRATOR/WORKER/SKEPTIC/CHEAP` | Claude models | model slots per role |
+| `VOYAGE_API_KEY` / `VOYAGE_MODEL` | — | Voyage knowledge-base embeddings; local fallback without it |
+| `TAVILY_API_KEY` / `EXA_API_KEY` / `FIRECRAWL_API_KEY` | — | concurrent deep-research providers |
+| `MAX_WORKERS` | `0` | 0 auto-detects CPU/cgroup budget; 1 forces sequential |
 | `JOB_RUNNER` | `auto` | `arq`, `subprocess` or `sync` (tests only) |
 | `ALLOW_NETWORK` | `true` | false forces the labelled synthetic path |
 | `LAKE_ROOT` | `./artifacts/lake` | Parquet lake |
@@ -223,6 +251,11 @@ reference topology. Deployment is intentionally manual: this repository does not
   environment (the daemon is permission-denied). The local subprocess backend has a native-parity
   test; build `nullpoint-sandbox:latest` and verify a staging sprint before relying on it.
 - LLM cost figures are estimates from published token prices, not invoices.
+- Web research and Voyage embeddings send queries/documents to third-party APIs. They are
+  optional and disabled by `ALLOW_NETWORK=false`; knowledge-base citations are evidence, not
+  proof of a tradable edge, and still have to pass the same validation gates.
+- Parallel grid execution changes wall-clock time, not the statistical result: trials are
+  counted in full and the same seeded engine is used for every combination.
 - Paper trading is simulation-first. Alpaca integration is read-only and restricted to paper endpoints.
 - Multi-tenant isolation, auth and rate limits are implemented, but this is not a hardened
   internet-facing trading system; review `docs/SECURITY.md` before exposing it publicly.

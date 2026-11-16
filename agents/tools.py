@@ -28,7 +28,10 @@ from sqlalchemy.orm import Session
 
 from agents.bus import BudgetGuard, MessageBus
 from agents.embeddings import embed, is_duplicate
+from agents.knowledge import KnowledgeBase
 from agents.llm import LLMClient, build_llm
+from agents.search import SearchRouter
+from agents.search import deep_research as run_deep_research
 from agents.tearsheet import render_tearsheet
 from data.lake import DataLake
 from data.pipeline import Dataset, load_universe
@@ -97,6 +100,11 @@ class ToolContext:
         "list_ideas",
         "remember",
         "recall",
+        "knowledge_add",
+        "knowledge_search",
+        "knowledge_stats",
+        "web_search",
+        "deep_research",
     )
 
     def __init__(
@@ -131,6 +139,8 @@ class ToolContext:
         self.trial_counter = DBTrialCounter(session, org_id)
         self._dataset: Dataset | None = None
         self._llms: dict[str, LLMClient] = {}
+        self._knowledge: KnowledgeBase | None = None
+        self._search: SearchRouter | None = None
 
     # ------------------------------------------------------------- plumbing
     def llm(self, model_key: str) -> LLMClient:
@@ -141,7 +151,13 @@ class ToolContext:
                 "cheap": self.settings.model_cheap,
                 "skeptic": self.settings.model_skeptic,
             }.get(model_key, self.settings.model_worker)
-            self._llms[model_key] = build_llm(model, self.settings.llm_provider, self.settings.anthropic_key)
+            self._llms[model_key] = build_llm(
+                model,
+                self.settings.llm_provider,
+                self.settings.llm_key,
+                base_url=self.settings.llm_base_url,
+                timeout=self.settings.llm_timeout_seconds,
+            )
         return self._llms[model_key]
 
     def narrate(self, agent: AgentSpec, prompt: str) -> str:
@@ -179,6 +195,7 @@ class ToolContext:
             lake=self.lake,
             allow_network=self.allow_network,
             benchmark=symbols[0] if symbols else None,
+            max_workers=self.settings.max_workers or None,
         )
         self._dataset = dataset
         for entry in dataset.quality:
@@ -211,6 +228,7 @@ class ToolContext:
             objective="sharpe",
             trial_counter=self.trial_counter,
             min_trades=3,
+            max_workers=self.settings.max_workers or None,
         )
 
     def validate(
@@ -228,6 +246,7 @@ class ToolContext:
             embargo=5,
             mc_sims=200,
             seed=7,
+            max_workers=self.settings.max_workers or None,
         )
 
     def risk_report(
@@ -294,7 +313,7 @@ class ToolContext:
             result=result,
             report=report,
             dataset_meta=dataset_meta,
-            out_dir=Path("artifacts/tearsheets"),
+            out_dir=Path(self.settings.artifacts_dir) / "tearsheets",
         )
 
     def record_idea(
@@ -368,6 +387,83 @@ class ToolContext:
         self.session.add(memory)
         self.session.commit()
         return {"memory_id": memory.id, "kind": kind}
+
+    # --------------------------------------------------------- research tools
+    @property
+    def knowledge(self) -> KnowledgeBase:
+        if self._knowledge is None:
+            self._knowledge = KnowledgeBase(
+                self.session,
+                self.org_id,
+                # Voyage is an external call; ALLOW_NETWORK=false must keep the local fallback.
+                api_key=self.settings.voyage_key if self.allow_network else None,
+                model=self.settings.voyage_model,
+                base_url=self.settings.voyage_base_url,
+                chunk_chars=self.settings.knowledge_chunk_chars,
+            )
+        return self._knowledge
+
+    @property
+    def search(self) -> SearchRouter:
+        if self._search is None:
+            self._search = SearchRouter(
+                keys=self.settings.search_keys,
+                enabled=self.settings.search_providers,
+                timeout=self.settings.web_search_timeout_seconds,
+                cache_ttl_seconds=self.settings.web_search_cache_ttl_seconds,
+                max_results=self.settings.web_search_max_results,
+            )
+        return self._search
+
+    def knowledge_add(
+        self,
+        title: str,
+        body: str,
+        *,
+        source: str = "manual",
+        url: str = "",
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.knowledge.add(title, body, source=source, url=url, tags=tags)
+
+    def knowledge_search(
+        self, query: str, limit: int = 6, tags: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        return self.knowledge.search(query, limit=limit, tags=tags)
+
+    def knowledge_stats(self) -> dict[str, Any]:
+        return self.knowledge.stats()
+
+    def web_search(
+        self, query: str, max_results: int | None = None, providers: list[str] | None = None
+    ) -> dict[str, Any]:
+        if not self.allow_network:
+            return {
+                "query": query,
+                "hits": [],
+                "providers": [],
+                "errors": ["ALLOW_NETWORK=false; web search disabled"],
+                "count": 0,
+            }
+        return self.search.search(query, max_results=max_results, providers=providers).as_dict()
+
+    def deep_research(self, query: str, max_results: int = 8) -> dict[str, Any]:
+        """Combine tenant knowledge with several complementary web queries."""
+        knowledge_hits = self.knowledge_search(query, limit=5)
+        if not self.allow_network:
+            return {
+                "query": query,
+                "queries": [query],
+                "hits": [],
+                "knowledge": knowledge_hits,
+                "providers": [],
+                "errors": ["ALLOW_NETWORK=false; web research disabled"],
+            }
+        result = run_deep_research(query, router=self.search, max_queries=3)
+        payload = result.as_dict()
+        payload["hits"] = payload["hits"][: max(1, min(int(max_results), 20))]
+        payload["knowledge"] = knowledge_hits
+        return payload
 
     def recall(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         rows = (

@@ -197,9 +197,17 @@ class DataLake:
         *,
         ttl_hours: float = 24.0,
         force: bool = False,
+        start: str | pd.Timestamp | None = None,
+        end: str | pd.Timestamp | None = None,
     ) -> tuple[pd.DataFrame, dict[str, Any], bool]:
         """Return (frame, meta, cache_hit). Never silently serves stale data past TTL."""
         cached = self.read_bars(provider, symbol, interval)
+        if cached and not force:
+            frame, meta = cached
+            if start is not None and len(frame) and frame.index[0] > pd.Timestamp(start).normalize():
+                cached = None
+            if end is not None and len(frame) and frame.index[-1] < pd.Timestamp(end).normalize() - pd.Timedelta(days=7):
+                cached = None
         if cached and not force:
             frame, meta = cached
             fetched_at = pd.Timestamp(

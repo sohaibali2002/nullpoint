@@ -4,6 +4,7 @@ import pytest
 from api.config import settings
 from api.db import Base, get_db
 from api.main import app
+from api.security import AUTH_LIMITER, RATE_LIMITER
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -27,6 +28,10 @@ def api(tmp_path, monkeypatch):
             session.close()
 
     app.dependency_overrides[get_db] = override_db
+    # The limiters are process-global; each test gets a fresh bucket so auth-heavy
+    # integration tests do not make later tests flaky.
+    AUTH_LIMITER._state.clear()
+    RATE_LIMITER._state.clear()
     monkeypatch.setattr(settings, "job_runner", "sync")
     monkeypatch.setattr(settings, "allow_network", False)
     monkeypatch.setattr(settings, "llm_provider", "mock")
@@ -87,6 +92,239 @@ def test_register_login_me_and_api_keys(api):
     assert key_auth.status_code == 200
 
     assert api.get("/sprints").status_code == 401
+
+
+def test_agent_chat_persists_and_is_tenant_scoped(api):
+    token = _register(api, "chat@example.com", "Chat Desk")
+    created = api.post("/chats", headers=_auth(token), json={"agent": "skeptic"})
+    assert created.status_code == 201, created.text
+    thread = created.json()["thread"]
+    assert thread["agent"] == "skeptic"
+    assert thread["agent_name"] == "Skeptic / Red Team"
+    assert created.json()["messages"] == []
+
+    first = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "How would you falsify a momentum idea?"},
+    )
+    assert first.status_code == 200, first.text
+    payload = first.json()
+    assert [message["role"] for message in payload["messages"]] == ["user", "assistant"]
+    assert payload["messages"][0]["content"] == "How would you falsify a momentum idea?"
+    assert payload["messages"][1]["content"]
+    assert payload["messages"][1]["model"]
+    assert payload["thread"]["title"].startswith("How would you falsify")
+
+    second = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "What data would you check next?"},
+    )
+    assert second.status_code == 200, second.text
+    assert len(second.json()["messages"]) == 4
+
+    listing = api.get("/chats", headers=_auth(token)).json()
+    assert len(listing) == 1
+    assert listing[0]["message_count"] == 4
+    assert listing[0]["last_message"]
+
+    other = _register(api, "other-chat@example.com", "Other Desk")
+    assert api.get(f"/chats/{thread['id']}", headers=_auth(other)).status_code == 404
+    assert api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(other),
+        json={"content": "let me in"},
+    ).status_code == 404
+    assert api.get("/chats", headers=_auth(other)).json() == []
+
+    assert api.post("/chats", headers=_auth(token), json={"agent": "not-an-agent"}).status_code == 400
+    assert api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "   "},
+    ).status_code == 400
+
+    deleted = api.delete(f"/chats/{thread['id']}", headers=_auth(token))
+    assert deleted.status_code == 204
+    assert api.get(f"/chats/{thread['id']}", headers=_auth(token)).status_code == 404
+    assert api.get("/chats", headers=_auth(token)).json() == []
+
+
+def test_research_room_debates_and_synthesizes(api):
+    token = _register(api, "room@example.com", "Room Desk")
+    created = api.post(
+        "/chats",
+        headers=_auth(token),
+        json={"agents": ["ideator", "data_engineer", "skeptic"]},
+    )
+    assert created.status_code == 201, created.text
+    thread = created.json()["thread"]
+    assert thread["mode"] == "room"
+    assert thread["agent_name"] == "Research room"
+    assert thread["participants"] == ["ideator", "data_engineer", "skeptic"]
+    assert len(thread["participant_names"]) == 3
+
+    sent = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "Compare momentum and mean reversion for a crowded mega-cap.", "use_web": False},
+    )
+    assert sent.status_code == 200, sent.text
+    payload = sent.json()
+    assistants = [message for message in payload["messages"] if message["role"] == "assistant"]
+    assert [message["agent"] for message in assistants] == [
+        "ideator",
+        "data_engineer",
+        "skeptic",
+        "orchestrator",
+    ]
+    assert [message["kind"] for message in assistants] == [
+        "analysis",
+        "analysis",
+        "analysis",
+        "synthesis",
+    ]
+    assert payload["messages"][0]["role"] == "user"
+    assert len(payload["messages"]) == 5
+    assert payload["thread"]["message_count"] == 5
+    assert payload["thread"]["title"].startswith("Compare momentum")
+
+    second = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "What evidence would change your mind?", "use_web": False},
+    )
+    assert second.status_code == 200, second.text
+    assert len(second.json()["messages"]) == 10
+    assert second.json()["messages"][-1]["agent"] == "orchestrator"
+    assert second.json()["messages"][-1]["kind"] == "synthesis"
+
+    listing = api.get("/chats", headers=_auth(token)).json()
+    assert listing[0]["mode"] == "room"
+    assert listing[0]["message_count"] == 10
+
+    assert api.post(
+        "/chats",
+        headers=_auth(token),
+        json={"agents": ["skeptic"]},
+    ).status_code == 400
+    assert api.post(
+        "/chats",
+        headers=_auth(token),
+        json={"agents": ["skeptic", "not-an-agent"]},
+    ).status_code == 400
+
+
+def test_auto_research_chooses_specialists(api):
+    token = _register(api, "auto@example.com", "Auto Desk")
+    created = api.post("/chats", headers=_auth(token), json={"auto": True})
+    assert created.status_code == 201, created.text
+    thread = created.json()["thread"]
+    assert thread["mode"] == "auto"
+    assert thread["agent_name"] == "Auto research"
+    assert thread["participants"] == []
+
+    sent = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "What risk controls would keep a momentum idea from blowing up?", "use_web": False},
+    )
+    assert sent.status_code == 200, sent.text
+    payload = sent.json()
+    assert payload["thread"]["mode"] == "auto"
+    assert "skeptic" in payload["thread"]["participants"]
+    assert "risk_analyst" in payload["thread"]["participants"]
+    assert payload["messages"][-1]["agent"] == "orchestrator"
+    assert payload["messages"][-1]["kind"] == "synthesis"
+
+
+def test_synthesis_serializes_structured_ui():
+    from api.models import ChatMessage
+    from api.services.chat import message_dict
+
+    message = ChatMessage(
+        id="m1",
+        thread_id="t1",
+        org_id="o1",
+        role="assistant",
+        agent="orchestrator",
+        kind="synthesis",
+        content=(
+            "**Read**: Insider selling is noisy.\n\n"
+            "**Where the room agrees**: Context matters.\n\n"
+            "**Where it disagrees**: The magnitude.\n\n"
+            "**What would change our mind**: A clean out-of-sample test.\n\n"
+            "**Next sprint**: Test filing-date leakage."
+        ),
+    )
+    blocks = message_dict(message)["ui"]
+    assert blocks[0]["type"] == "brief"
+    assert [section["heading"] for section in blocks[0]["sections"]] == [
+        "Read",
+        "Where the room agrees",
+        "Where it disagrees",
+        "What would change our mind",
+        "Next sprint",
+    ]
+
+
+def test_chat_stream_emits_persisted_messages(api, monkeypatch):
+    import api.routers.chat as chat_router
+
+    token = _register(api, "stream@example.com", "Stream Desk")
+    created = api.post("/chats", headers=_auth(token), json={"agent": "skeptic"}).json()
+    monkeypatch.setattr(chat_router, "SessionLocal", api.session_factory)
+    with api.stream(
+        "POST",
+        f"/chats/{created['thread']['id']}/messages/stream",
+        headers=_auth(token),
+        json={"content": "Give me one falsification test.", "use_web": False},
+    ) as response:
+        assert response.status_code == 200
+        text = "".join(response.iter_text())
+    assert "event: start" in text
+    assert "event: message" in text
+    assert "event: done" in text
+    assert "event: error" not in text
+
+
+def test_knowledge_upload_and_shared_library(api):
+    token = _register(api, "knowledge@example.com", "Knowledge Desk")
+    upload = api.post(
+        "/knowledge/upload",
+        headers=_auth(token),
+        data={"title": "Momentum notes", "tags": "momentum,notes"},
+        files={"file": ("momentum.md", b"Momentum works best when liquidity is stable and the trend is broad. " * 4, "text/markdown")},
+    )
+    assert upload.status_code == 201, upload.text
+    assert upload.json()["chunks"] >= 1
+    stats = api.get("/knowledge", headers=_auth(token)).json()
+    assert stats["documents"] >= 1
+    search = api.get("/knowledge/search?q=momentum%20liquidity", headers=_auth(token)).json()
+    assert search["hits"]
+
+    from api.models import Memory, Organization
+
+    from agents.embeddings import embed
+    from agents.knowledge import LIBRARY_ORG_ID
+
+    session = api.session_factory()
+    session.add(Organization(id=LIBRARY_ORG_ID, name="Library", slug="test-library", plan="library"))
+    session.add(
+        Memory(
+            org_id=LIBRARY_ORG_ID,
+            kind="knowledge",
+            title="Shared value note",
+            body="A margin of safety is the difference between price and intrinsic value.",
+            embedding=embed("A margin of safety is the difference between price and intrinsic value."),
+            payload={"source": "library", "embedding_model": "local-hash-256", "tags": ["value"]},
+        )
+    )
+    session.commit()
+    session.close()
+    shared = api.get("/knowledge/search?q=margin%20of%20safety", headers=_auth(token)).json()
+    assert any(hit["title"] == "Shared value note" for hit in shared["hits"])
 
 
 def test_tenant_isolation(api):
@@ -265,6 +503,31 @@ def test_settings_usage_models_and_agents(api):
     assert models["configured"]["skeptic"]
     assert api.post("/alerts/test", headers=_auth(token)).status_code == 200
     assert api.get("/safety").status_code == 200
+
+
+def test_knowledge_endpoints_roundtrip(api):
+    token = _register(api)
+    stats = api.get("/knowledge", headers=_auth(token)).json()
+    assert stats["chunks"] == 0
+    assert stats["voyage_configured"] is False
+
+    created = api.post(
+        "/knowledge",
+        headers=_auth(token),
+        json={
+            "title": "Momentum evidence",
+            "body": "Cross-sectional momentum is sensitive to crowding and transaction costs.",
+            "source": "internal",
+            "tags": ["momentum", "costs"],
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["created"] > 0
+
+    found = api.get("/knowledge/search", headers=_auth(token), params={"q": "momentum costs"})
+    assert found.status_code == 200, found.text
+    assert found.json()["hits"]
+    assert found.json()["hits"][0]["title"] == "Momentum evidence"
 
 
 def test_chat_launch_parses_sector_universe(api):

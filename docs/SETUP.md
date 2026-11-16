@@ -73,9 +73,34 @@ Synthetic runs are labelled in the API, ledger, tearsheet and UI.
 ```bash
 uv pip install -e ".[vbt]"     # vectorbt engine adapter
 uv pip install -e ".[bta]"     # backtesting.py adapter
-uv pip install -e ".[llm]"     # Anthropic SDK
+uv pip install -e ".[llm]"     # Anthropic SDK (other LLM providers need no SDK)
 uv pip install -e ".[pdf]"     # PDF tearsheets (optional path)
 ```
+
+## Research providers
+
+Every integration below is optional and degrades honestly when absent:
+
+```bash
+# Any OpenAI-compatible LLM (or use LLM_PROVIDER=anthropic)
+export LLM_PROVIDER=openrouter
+# or: openai | groq | deepseek | mistral | xai | together | fireworks | gemini | ollama
+export LLM_API_KEY=...
+# export LLM_BASE_URL=http://localhost:8000/v1   # for custom/vLLM/LM Studio/Azure
+
+export VOYAGE_API_KEY=...       # Voyage knowledge-base embeddings; local fallback
+
+export TAVILY_API_KEY=...       # web research providers; use any subset
+export EXA_API_KEY=...
+export FIRECRAWL_API_KEY=...
+
+# cap grid/download concurrency; 0 = auto CPU/cgroup detection
+export MAX_WORKERS=4
+```
+
+Run `POST /sprints` as usual. The Ideator now queries the knowledge base and deep-research
+providers before proposing ideas; citations appear in the sprint audit trail. Without keys the
+sprint still runs with the deterministic template library and local embeddings.
 
 ## Checks
 

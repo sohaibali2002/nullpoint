@@ -110,6 +110,7 @@ class SandboxEngineAdapter(EngineAdapter):
     """Run the native engine in a sandboxed process/container."""
 
     name = "sandbox"
+    supports_parallel = True
 
     def __init__(self, *, production: bool | None = None) -> None:
         self.production = production

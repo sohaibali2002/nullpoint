@@ -8,8 +8,10 @@ import {
   Database,
   FlaskConical,
   LayoutDashboard,
+  Library,
   Lightbulb,
   Menu,
+  MessageSquare,
   Settings,
   ShieldCheck,
   Wallet,
@@ -28,6 +30,8 @@ const NAV = [
     label: "Research",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/chat", label: "Agent chat", icon: MessageSquare },
+      { href: "/knowledge", label: "Knowledge", icon: Library },
       { href: "/sprints", label: "Agent sprints", icon: Activity },
       { href: "/strategies", label: "Strategies", icon: BarChart3 },
       { href: "/ideas", label: "Idea lab", icon: Lightbulb },
@@ -53,6 +57,8 @@ const NAV = [
 
 const TITLES: Array<[string, string, string]> = [
   ["/dashboard", "Dashboard", "Research overview"],
+  ["/chat", "Agent chat", "Direct line"],
+  ["/knowledge", "Knowledge library", "Voyage embeddings"],
   ["/sprints/", "Sprint replay", "Agent audit trail"],
   ["/sprints", "Agent sprints", "Live research"],
   ["/strategies/", "Strategy", "Validation record"],

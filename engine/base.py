@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from engine.metrics import TRADING_DAYS, Trade, compute_metrics
+from engine.performance import parallel_map, worker_count
 from engine.strategy import StrategySpec
 
 OBJECTIVES = ("sharpe", "sortino", "calmar", "cagr", "total_return", "profit_factor")
@@ -39,6 +41,12 @@ class MarketData:
     benchmark: pd.Series | None = None
     provider: str = "unknown"
     as_of: str | None = None
+    # Features depend only on the panel/spec, not on the parameter combo. Grid and
+    # walk-forward re-use them heavily; the cache is per-dataset so it cannot leak data
+    # between tenants. It is excluded from equality/repr and never serialized.
+    _feature_cache: dict[tuple[str, str], dict[str, pd.DataFrame]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.close, pd.DataFrame) or self.close.empty:
@@ -250,6 +258,10 @@ class EngineAdapter(ABC):
 
     name: str = "base"
     supports_multi_asset: bool = True
+    # Pooled grid execution only where the engine actually parallelizes.  The native
+    # pandas engine is GIL-bound, so a pool makes small/medium grids slower; it relies on
+    # the per-dataset feature cache instead.  Subprocess/sandbox engines can overlap safely.
+    supports_parallel: bool = False
 
     @abstractmethod
     def run_backtest(
@@ -276,6 +288,8 @@ class EngineAdapter(ABC):
         min_trades: int = 3,
         cost_multiplier: float = 1.0,
         max_trials: int | None = None,
+        parallel: bool = True,
+        max_workers: int | None = None,
     ) -> GridResult:
         if objective not in OBJECTIVES:
             raise ValueError(f"objective must be one of {OBJECTIVES}")
@@ -284,21 +298,48 @@ class EngineAdapter(ABC):
             combos = combos[:max_trials]
         results: list[BacktestResult] = []
         failures: list[dict[str, Any]] = []
-        for combo in combos:
-            try:
-                result = self.run_backtest(
-                    spec.with_params(combo),
-                    data,
-                    trial_counter=trial_counter,
-                    cost_multiplier=cost_multiplier,
-                )
-            except Exception as exc:
-                failures.append({"params": combo, "error": str(exc)})
-                # A failed attempt is still a trial: multiple-testing accounting must include it.
-                if trial_counter is not None:
-                    trial_counter.increment(1)
-                continue
-            results.append(result)
+        started = time.perf_counter()
+        workers = min(worker_count(max_workers), max(1, len(combos)))
+
+        # Tiny grids are faster sequentially: the pool setup and GIL contention cost more than
+        # the work.  Large grids amortize that and benefit from overlapping pandas/NumPy calls.
+        use_parallel = parallel and self.supports_parallel and workers > 1 and len(combos) >= 8
+        if use_parallel:
+            # Do not hand the DB-backed counter to worker threads: SQLAlchemy sessions are not
+            # thread-safe.  Every attempt is still counted, once, after the batch completes.
+            def run_one(combo: dict[str, Any]) -> tuple[dict[str, Any], BacktestResult | None, str | None]:
+                try:
+                    return combo, self.run_backtest(
+                        spec.with_params(combo), data, cost_multiplier=cost_multiplier
+                    ), None
+                except Exception as exc:
+                    return combo, None, f"{type(exc).__name__}: {exc}"
+
+            outcomes = parallel_map(run_one, combos, max_workers=workers)
+            for combo, result, error in outcomes:
+                if error is not None:
+                    failures.append({"params": combo, "error": error})
+                elif result is not None:
+                    results.append(result)
+            if trial_counter is not None:
+                trial_counter.increment(len(combos))
+        else:
+            for combo in combos:
+                try:
+                    result = self.run_backtest(
+                        spec.with_params(combo),
+                        data,
+                        trial_counter=trial_counter,
+                        cost_multiplier=cost_multiplier,
+                    )
+                except Exception as exc:
+                    failures.append({"params": combo, "error": str(exc)})
+                    # A failed attempt is still a trial: multiple-testing accounting must include it.
+                    if trial_counter is not None:
+                        trial_counter.increment(1)
+                    continue
+                results.append(result)
+
         scored = [r for r in results if _score(r, objective, min_trades) > float("-inf")]
         best = max(scored, key=lambda r: _score(r, objective, min_trades)) if scored else None
         return GridResult(
@@ -309,6 +350,12 @@ class EngineAdapter(ABC):
             best_params=dict(best.params) if best else {},
             trial_index=trial_counter.value if trial_counter else 0,
             failures=failures,
+            metadata={
+                "workers": workers,
+                "parallel": use_parallel,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "trials": len(combos),
+            },
         )
 
     # --------------------------------------------------------------- tribes
@@ -396,6 +443,7 @@ class EngineAdapter(ABC):
         max_trials: int = 40,
         warmup_bars: int = 120,
         seed: int = 7,
+        max_workers: int | None = None,
     ) -> WalkForwardReport:
         if mode not in {"rolling", "anchored"}:
             raise ValueError("mode must be 'rolling' or 'anchored'")
@@ -440,6 +488,7 @@ class EngineAdapter(ABC):
                     trial_counter=trial_counter,
                     min_trades=min_trades,
                     cost_multiplier=cost_multiplier,
+                    max_workers=max_workers,
                 )
             if train.best is None:
                 fold_records.append(
