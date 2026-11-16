@@ -57,6 +57,7 @@ MAX_WEB_SOURCES = 5
 MAX_ROOM_PARTICIPANTS = 5
 MIN_ROOM_PARTICIPANTS = 2
 DEFAULT_ROOM_PARTICIPANTS = ("ideator", "data_engineer", "skeptic", "risk_analyst")
+DEEP_WEB_SOURCES = 8
 
 
 def agent_name(agent: str) -> str:
@@ -115,6 +116,10 @@ def _ui_blocks(message: ChatMessage) -> list[dict[str, Any]]:
             sections.append({"heading": heading, "body": " ".join(body).strip()})
         if sections:
             return [{"type": "brief", "sections": sections}]
+    if kind == "attachment":
+        sources = list(getattr(message, "sources", None) or [])
+        filename = str(sources[0].get("title", "Attached file")) if sources else "Attached file"
+        return [{"type": "attachment", "filename": filename, "provider": "file"}]
     if kind == "evidence":
         sources = list(getattr(message, "sources", None) or [])
         if sources:
@@ -162,15 +167,64 @@ def _model_for(agent: str, settings: Settings) -> str:
     }.get(spec.model_key, settings.model_worker)
 
 
-def _client_for(agent: str, settings: Settings) -> LLMClient:
-    model = _model_for(agent, settings)
+def _client_for(agent: str, settings: Settings, *, model: str | None = None) -> LLMClient:
+    selected = model or _model_for(agent, settings)
     return build_llm(
-        model,
+        selected,
         settings.llm_provider,
         settings.llm_key,
         base_url=settings.llm_base_url,
         timeout=settings.llm_timeout_seconds,
     )
+
+
+def model_for_task(agent: str, task: str, settings: Settings, *, deep: bool = False) -> str:
+    """Pick a model slot from the job, not just the agent's default.
+
+    This keeps cheap extraction cheap, sends implementation/backtest work to the stronger worker
+    slot, and reserves the orchestrator slot for synthesis or genuinely ambiguous research.
+    """
+    text = " ".join(str(task or "").lower().split())
+    spec = AGENT_SPECS.get(agent) or AGENT_SPECS["orchestrator"]
+    if agent == "skeptic":
+        return settings.model_skeptic
+    if agent in {"librarian", "data_engineer", "backtester"} and len(text) < 220 and not deep:
+        return settings.model_cheap
+    if any(
+        token in text
+        for token in (
+            "backtest",
+            "implement",
+            "code",
+            "optimi",
+            "vectorbt",
+            "python",
+            "position siz",
+            "portfolio construction",
+        )
+    ):
+        return settings.model_worker
+    if deep or agent == "orchestrator" or any(
+        token in text
+        for token in (
+            "compare",
+            "research",
+            "why",
+            "evidence",
+            "multi-step",
+            "thesis",
+            "scenario",
+            "falsif",
+        )
+    ):
+        return settings.model_orchestrator
+    slot = {
+        "orchestrator": settings.model_orchestrator,
+        "worker": settings.model_worker,
+        "cheap": settings.model_cheap,
+        "skeptic": settings.model_skeptic,
+    }.get(spec.model_key, settings.model_worker)
+    return slot
 
 
 def _knowledge_context(db: Session, org_id: str, query: str, settings: Settings) -> list[dict[str, Any]]:
@@ -215,21 +269,22 @@ def _memory_context(db: Session, org_id: str, query: str) -> list[dict[str, Any]
     ]
 
 
-def _web_sources(query: str, settings: Settings) -> list[dict[str, Any]]:
+def _web_sources(query: str, settings: Settings, *, limit: int = MAX_WEB_SOURCES) -> list[dict[str, Any]]:
     """Retrieve one evidence bundle for the room.  Failure degrades honestly to no sources."""
     if not settings.allow_network:
         return []
+    limit = max(1, min(int(limit), DEEP_WEB_SOURCES))
     try:
         router = SearchRouter(
             keys=settings.search_keys,
             enabled=settings.search_providers,
             timeout=settings.web_search_timeout_seconds,
             cache_ttl_seconds=settings.web_search_cache_ttl_seconds,
-            max_results=MAX_WEB_SOURCES,
+            max_results=limit,
         )
         result = router.search(query.strip()[:400])
         sources: list[dict[str, Any]] = []
-        for index, hit in enumerate(result.hits[:MAX_WEB_SOURCES], start=1):
+        for index, hit in enumerate(result.hits[:limit], start=1):
             row = hit.as_dict()
             row["id"] = f"S{index}"
             sources.append(row)
@@ -381,14 +436,22 @@ def _save_message(
     return message
 
 
-def append_user_message(db: Session, thread: ChatThread, content: str) -> ChatMessage:
+def append_user_message(
+    db: Session,
+    thread: ChatThread,
+    content: str,
+    *,
+    kind: str = "message",
+    sources: list[dict[str, Any]] | None = None,
+) -> ChatMessage:
     message = _save_message(
         db,
         thread,
         role="user",
         agent=thread.agent,
         content=content,
-        kind="message",
+        kind=kind,
+        sources=sources,
     )
     if thread.title in {
         "New conversation",
@@ -413,11 +476,19 @@ def _agent_turn(
     kind: str,
     sources: list[dict[str, Any]] | None = None,
     max_tokens: int = 450,
+    task: str = "",
+    deep: bool = False,
+    model: str | None = None,
 ) -> ChatMessage:
     spec = AGENT_SPECS.get(agent) or AGENT_SPECS["orchestrator"]
-    model = _model_for(agent, settings)
-    client = _client_for(agent, settings)
+    selected_model = model or model_for_task(agent, task or instruction, settings, deep=deep)
+    client = _client_for(agent, settings, model=selected_model)
     system = spec.system_prompt + "\n\n" + CHAT_PREAMBLE + "\n\n" + instruction
+    if deep:
+        system += (
+            "\n\nDeep research mode: surface the strongest counter-case, distinguish consensus "
+            "from evidence, and name the one measurement that would make you abandon the idea."
+        )
     if getattr(thread, "summary", ""):
         system += "\n\nEarlier conversation summary:\n" + thread.summary
     if context:
@@ -438,7 +509,7 @@ def _agent_turn(
         agent=agent,
         content=text,
         kind=kind,
-        model=response.model or model,
+        model=response.model or selected_model,
         tokens_in=response.tokens_in,
         tokens_out=response.tokens_out,
         cost_usd=cost,
@@ -447,7 +518,7 @@ def _agent_turn(
     db.add(
         LLMUsage(
             org_id=thread.org_id,
-            model=message.model or model,
+            model=message.model or selected_model,
             tokens_in=message.tokens_in,
             tokens_out=message.tokens_out,
             cost_usd=message.cost_usd,
@@ -512,13 +583,14 @@ def generate_reply(
     *,
     settings: Settings,
     use_web: bool = True,
+    deep: bool = False,
 ) -> ChatMessage:
     _maybe_compact(db, thread, settings)
     history = _history(db, thread.id)
     if not history:
         raise ValueError("cannot generate a reply without a user message")
     latest = history[-1].content
-    sources = _web_sources(latest, settings) if use_web else []
+    sources = _web_sources(latest, settings, limit=DEEP_WEB_SOURCES if deep else MAX_WEB_SOURCES) if use_web else []
     context = _context_block(db, thread.org_id, latest, settings, sources=sources)
     return _agent_turn(
         db,
@@ -533,7 +605,9 @@ def generate_reply(
         settings=settings,
         kind="message",
         sources=sources,
-        max_tokens=900,
+        max_tokens=1200 if deep else 900,
+        task=latest,
+        deep=deep,
     )
 
 
@@ -543,6 +617,7 @@ def generate_room_round(
     *,
     settings: Settings,
     use_web: bool = True,
+    deep: bool = False,
 ) -> None:
     """Run one visible room round and persist every turn as it is produced."""
     participants = [
@@ -550,13 +625,30 @@ def generate_room_round(
         for key in (thread.participants or [])
         if key in AGENT_SPECS and key != "orchestrator"
     ]
-    if not participants and thread.mode == "auto":
-        history = _history(db, thread.id)
-        latest = next((item for item in reversed(history) if item.role == "user"), None)
-        if latest is not None:
-            participants = _auto_participants(latest.content)
+    if thread.mode == "auto":
+        if deep:
+            participants = [
+                key
+                for key in (
+                    "ideator",
+                    "data_engineer",
+                    "strategy_coder",
+                    "backtester",
+                    "risk_analyst",
+                    "portfolio_constructor",
+                    "skeptic",
+                )
+                if key in AGENT_SPECS
+            ]
             thread.participants = participants
             db.commit()
+        elif not participants:
+            history = _history(db, thread.id)
+            latest = next((item for item in reversed(history) if item.role == "user"), None)
+            if latest is not None:
+                participants = _auto_participants(latest.content)
+                thread.participants = participants
+                db.commit()
     if len(participants) < MIN_ROOM_PARTICIPANTS:
         raise ValueError("a research room needs at least two specialists")
     _maybe_compact(db, thread, settings)
@@ -565,7 +657,15 @@ def generate_room_round(
     if latest_user is None:
         raise ValueError("cannot run a room round without a user question")
 
-    sources = _web_sources(latest_user.content, settings) if use_web else []
+    sources = (
+        _web_sources(
+            latest_user.content,
+            settings,
+            limit=DEEP_WEB_SOURCES if deep else MAX_WEB_SOURCES,
+        )
+        if use_web
+        else []
+    )
     evidence = ""
     if use_web:
         if sources:
@@ -620,6 +720,9 @@ def generate_room_round(
             settings=settings,
             kind="analysis",
             sources=[],
+            max_tokens=700 if deep else 450,
+            task=latest_user.content,
+            deep=deep,
         )
 
     synthesis = _agent_turn(
@@ -631,7 +734,9 @@ def generate_room_round(
         settings=settings,
         kind="synthesis",
         sources=sources,
-        max_tokens=650,
+        max_tokens=950 if deep else 650,
+        task=latest_user.content,
+        deep=deep,
     )
     if thread.mode in {"room", "auto"}:
         _remember_room(db, thread, synthesis)

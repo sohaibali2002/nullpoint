@@ -74,6 +74,30 @@ export async function uploadKnowledge(form: FormData): Promise<any> {
   return body;
 }
 
+export async function uploadChatFile(threadId: string, file: File): Promise<any> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const form = new FormData();
+  form.set("file", file);
+  const response = await fetch(`/api/chats/${threadId}/upload`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  const text = await response.text();
+  let body: any = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = { detail: text };
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status, body?.detail ?? `Upload failed (${response.status})`);
+  }
+  return body;
+}
+
 export async function streamChat(
   path: string,
   payload: Record<string, unknown>,

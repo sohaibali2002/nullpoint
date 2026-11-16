@@ -82,9 +82,14 @@ class ChatThreadIn(BaseModel):
     title: str | None = Field(default=None, min_length=2, max_length=120)
 
 
+class ChatThreadPatch(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+
+
 class ChatMessageIn(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     use_web: bool = True
+    deep: bool = False
 
 
 class IdeaIn(BaseModel):

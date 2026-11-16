@@ -8,17 +8,18 @@ import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from agents.knowledge import KnowledgeBase
 from agents.roster import AGENT_SPECS
 from api.config import settings
 from api.db import SessionLocal, get_db
 from api.deps import can_write, get_principal
 from api.models import ChatMessage, ChatThread, new_id
-from api.schemas import ChatMessageIn, ChatThreadIn
+from api.schemas import ChatMessageIn, ChatThreadIn, ChatThreadPatch
 from api.security import Principal
 from api.services import chat as chat_service
 
@@ -78,7 +79,9 @@ def create_thread(
         raise HTTPException(status_code=403, detail="viewer role cannot start conversations")
 
     requested = [item.strip().lower() for item in payload.agents if item.strip()]
-    if payload.auto:
+    # General chat is the default.  A caller has to name an agent or a room explicitly to
+    # get anything other than the orchestrator-led conversation.
+    if payload.auto or (payload.agent is None and not requested):
         thread = ChatThread(
             id=new_id(),
             org_id=principal.org_id,
@@ -136,6 +139,22 @@ def get_thread(
     )
 
 
+@router.patch("/{thread_id}")
+def rename_thread(
+    thread_id: str,
+    payload: ChatThreadPatch,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    if not can_write(principal):
+        raise HTTPException(status_code=403, detail="viewer role cannot rename conversations")
+    thread = _thread_or_404(db, principal.org_id, principal.user_id, thread_id)
+    thread.title = payload.title.strip()
+    db.commit()
+    db.refresh(thread)
+    return _summary(db, thread)
+
+
 @router.delete("/{thread_id}", status_code=204)
 def delete_thread(
     thread_id: str,
@@ -150,7 +169,7 @@ def delete_thread(
     return Response(status_code=204)
 
 
-def _run_generation(thread_id: str, use_web: bool, holder: dict[str, str]) -> None:
+def _run_generation(thread_id: str, use_web: bool, deep: bool, holder: dict[str, str]) -> None:
     session = SessionLocal()
     try:
         thread = session.get(ChatThread, thread_id)
@@ -159,16 +178,77 @@ def _run_generation(thread_id: str, use_web: bool, holder: dict[str, str]) -> No
             return
         if thread.mode in {"room", "auto"}:
             chat_service.generate_room_round(
-                session, thread, settings=settings, use_web=use_web
+                session, thread, settings=settings, use_web=use_web, deep=deep
             )
         else:
             chat_service.generate_reply(
-                session, thread, settings=settings, use_web=use_web
+                session, thread, settings=settings, use_web=use_web, deep=deep
             )
     except Exception as exc:  # surfaced to the client as an SSE error event
         holder["error"] = f"{type(exc).__name__}: {exc}"
     finally:
         session.close()
+
+
+@router.post("/{thread_id}/upload", status_code=201)
+async def upload_chat_file(
+    thread_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Index a file for this conversation and attach a readable preview to the thread.
+
+    The original upload is parsed in memory and discarded; only extracted text is indexed.  The
+    preview becomes a normal user turn so the next question has the document in context even before
+    semantic retrieval kicks in.
+    """
+    if not can_write(principal):
+        raise HTTPException(status_code=403, detail="viewer role cannot upload files")
+    thread = _thread_or_404(db, principal.org_id, principal.user_id, thread_id)
+    filename = (file.filename or "upload.txt").rsplit("/", 1)[-1]
+    data = await file.read()
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file is larger than 12 MB")
+    try:
+        from api.routers.research import _book_text
+
+        text = _book_text(filename, data).strip()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not read that file: {exc}") from exc
+    if not text:
+        raise HTTPException(status_code=400, detail="no readable text found in that file")
+    text = text[:500_000]
+    indexed = KnowledgeBase(
+        db,
+        principal.org_id,
+        api_key=settings.voyage_key if settings.allow_network else None,
+        model=settings.voyage_model,
+        base_url=settings.voyage_base_url,
+        chunk_chars=settings.knowledge_chunk_chars,
+    ).add(
+        filename.rsplit(".", 1)[0][:200] or filename,
+        text,
+        source="chat_upload",
+        tags=["chat-upload", thread.id],
+        metadata={"thread_id": thread.id, "filename": filename},
+    )
+    preview = " ".join(text.split())[:1800]
+    message = chat_service.append_user_message(
+        db,
+        thread,
+        f"{preview}\n\nThe file is indexed in this desk's knowledge base ({indexed['chunks']} chunks).",
+        kind="attachment",
+        sources=[{"id": "A1", "title": filename, "provider": "file", "url": ""}],
+    )
+    return {
+        **indexed,
+        "filename": filename,
+        "message_id": message.id,
+        "message": chat_service.message_dict(message),
+    }
 
 
 @router.post("/{thread_id}/messages/stream")
@@ -203,7 +283,7 @@ def stream_message(
         holder: dict[str, str] = {}
         worker = threading.Thread(
             target=_run_generation,
-            args=(run_id, payload.use_web, holder),
+            args=(run_id, payload.use_web, payload.deep, holder),
             daemon=True,
         )
         worker.start()
@@ -258,10 +338,12 @@ def send_message(
     try:
         if thread.mode in {"room", "auto"}:
             chat_service.generate_room_round(
-                db, thread, settings=settings, use_web=payload.use_web
+                db, thread, settings=settings, use_web=payload.use_web, deep=payload.deep
             )
         else:
-            chat_service.generate_reply(db, thread, settings=settings, use_web=payload.use_web)
+            chat_service.generate_reply(
+                db, thread, settings=settings, use_web=payload.use_web, deep=payload.deep
+            )
     except Exception as exc:
         # Keep the user's turn and any completed room turns; the next attempt can continue.
         raise HTTPException(

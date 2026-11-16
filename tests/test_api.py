@@ -289,6 +289,85 @@ def test_chat_stream_emits_persisted_messages(api, monkeypatch):
     assert "event: error" not in text
 
 
+def test_natural_language_universe_is_not_a_bare_ticker():
+    from api.routers.research import LARGE_CAPS, SECTOR_ETFS, parse_universe
+
+    assert parse_universe("Backtest insider buying on US large caps") == LARGE_CAPS
+    assert parse_universe("Compare sector ETFs with a drawdown cap") == SECTOR_ETFS
+    assert parse_universe("Use AAPL and MSFT") == ["AAPL", "MSFT"]
+    assert "US" not in parse_universe("US stocks")
+
+
+def test_general_chat_is_the_default_and_can_be_renamed(api):
+    token = _register(api, "general@example.com", "General Desk")
+    created = api.post("/chats", headers=_auth(token), json={})
+    assert created.status_code == 201, created.text
+    thread = created.json()["thread"]
+    assert thread["mode"] == "auto"
+    assert thread["agent_name"] == "Auto research"
+    renamed = api.patch(
+        f"/chats/{thread['id']}",
+        headers=_auth(token),
+        json={"title": "Insider-buying project"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "Insider-buying project"
+
+
+def test_model_selection_routes_by_task():
+    from api.config import Settings
+    from api.services.chat import model_for_task
+
+    config = Settings(app_env="test", llm_provider="mock")
+    assert model_for_task("orchestrator", "anything", config) == config.model_orchestrator
+    assert model_for_task("skeptic", "anything", config) == config.model_skeptic
+    assert model_for_task("data_engineer", "short lookup", config) == config.model_cheap
+    assert model_for_task("ideator", "write the backtest code", config) == config.model_worker
+    assert model_for_task("ideator", "compare the thesis", config, deep=True) == config.model_orchestrator
+
+
+def test_general_chat_accepts_an_attached_file(api):
+    token = _register(api, "attach@example.com", "Attachment Desk")
+    thread = api.post("/chats", headers=_auth(token), json={"auto": True}).json()["thread"]
+    uploaded = api.post(
+        f"/chats/{thread['id']}/upload",
+        headers=_auth(token),
+        files={"file": ("thesis.md", b"The thesis is that insider buying predicts drift after earnings. " * 8, "text/markdown")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    body = uploaded.json()
+    assert body["chunks"] >= 1
+    assert body["message"]["role"] == "user"
+    assert body["message"]["kind"] == "attachment"
+    assert body["message"]["ui"][0]["type"] == "attachment"
+    assert body["message"]["ui"][0]["filename"] == "thesis.md"
+    detail = api.get(f"/chats/{thread['id']}", headers=_auth(token)).json()
+    assert any(message["kind"] == "attachment" for message in detail["messages"])
+
+
+def test_deep_auto_room_uses_all_core_specialists(api):
+    token = _register(api, "deep@example.com", "Deep Desk")
+    thread = api.post("/chats", headers=_auth(token), json={"auto": True}).json()["thread"]
+    sent = api.post(
+        f"/chats/{thread['id']}/messages",
+        headers=_auth(token),
+        json={"content": "Compare a value and momentum blend under a drawdown constraint.", "use_web": False, "deep": True},
+    )
+    assert sent.status_code == 200, sent.text
+    payload = sent.json()
+    assert payload["thread"]["mode"] == "auto"
+    assert set(payload["thread"]["participants"]) >= {
+        "ideator",
+        "data_engineer",
+        "strategy_coder",
+        "backtester",
+        "risk_analyst",
+        "portfolio_constructor",
+        "skeptic",
+    }
+    assert len([message for message in payload["messages"] if message["kind"] == "analysis"]) == 7
+
+
 def test_knowledge_upload_and_shared_library(api):
     token = _register(api, "knowledge@example.com", "Knowledge Desk")
     upload = api.post(

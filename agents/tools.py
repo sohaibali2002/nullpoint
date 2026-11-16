@@ -476,7 +476,9 @@ class ToolContext:
         vector = embed(query)
         scored: list[tuple[float, Memory]] = []
         for row in rows:
-            if not row.embedding:
+            # Knowledge rows can use a different embedding model (for example Voyage 1024d);
+            # only compare vectors that belong to the same local space.
+            if not row.embedding or row.kind == "knowledge" or len(row.embedding) != len(vector):
                 continue
             score = float(np.dot(vector, row.embedding))
             scored.append((score, row))

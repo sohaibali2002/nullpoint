@@ -68,14 +68,14 @@ export default function SprintsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Live research"
-        title="Agent sprints"
-        description="A sprint is a bounded research run: an objective, a universe, a budget and an audit trail. Every message and every trial is persisted."
+        eyebrow="From idea to evidence"
+        title="Projects"
+        description="A project is a bounded research run: an objective, a universe, a budget and an audit trail. General chat can hand you one, and every message and trial is persisted."
         actions={<DataStamp demo={demo} />}
       />
 
       <div className="grid gap-3 xl:grid-cols-[1fr_1.45fr]">
-        <Panel title="Launch a sprint" eyebrow="objective → universe → budget">
+        <Panel title="Start a project" eyebrow="objective → universe → budget">
           <form onSubmit={launch} className="space-y-4 px-5 py-5">
             <label className="block">
               <span className="label">Research objective</span>

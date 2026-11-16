@@ -44,7 +44,27 @@ from api.services.serializers import idea_dict, sprint_dict, strategy_dict
 router = APIRouter(tags=["research"])
 
 SECTOR_ETFS = ["SPY", "QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB", "XLRE"]
+LARGE_CAPS = ["SPY", "QQQ", "DIA", "IWM", "XLK", "XLF", "XLV", "XLY"]
 CRYPTO = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+UNIVERSE_STOPWORDS = {
+    "US", "USA", "ETF", "ETFS", "AI", "CEO", "CFO", "EPS", "ROE", "PE", "PB",
+    "GDP", "CPI", "FED", "SEC", "IPO", "BUY", "SELL", "HOLD", "AND", "OR", "THE",
+}
+
+
+def parse_universe(text: str) -> list[str]:
+    """Turn a natural-language objective into a real, tradable universe."""
+    lowered = text.lower()
+    tokens = [token for token in re.findall(r"\b[A-Z]{2,6}\b", text) if token not in UNIVERSE_STOPWORDS]
+    if "crypto" in lowered or "bitcoin" in lowered:
+        return CRYPTO
+    if any(phrase in lowered for phrase in ("large cap", "mega cap", "blue chip", "us equity", "u.s. equity", "stocks")):
+        return LARGE_CAPS
+    if "sector" in lowered or "etf" in lowered:
+        return SECTOR_ETFS
+    if tokens:
+        return list(dict.fromkeys(tokens))[:12]
+    return SECTOR_ETFS
 
 
 def _sprint_or_404(db: Session, org_id: str, sprint_id: str) -> Sprint:
@@ -242,16 +262,7 @@ def sprint_from_chat(
 ) -> dict[str, Any]:
     """'Research mean reversion on sector ETFs' → a queued sprint with a parsed universe."""
     text = payload.message.strip()
-    lowered = text.lower()
-    tokens = re.findall(r"\b[A-Z]{2,6}\b", payload.message)
-    if "crypto" in lowered:
-        universe = CRYPTO
-    elif "sector" in lowered or "etf" in lowered:
-        universe = SECTOR_ETFS
-    elif tokens:
-        universe = tokens[:12]
-    else:
-        universe = SECTOR_ETFS
+    universe = parse_universe(text)
     objective = text if len(text) >= 8 else f"Research {text}"
     sprint = create_sprint(
         db,
@@ -470,7 +481,7 @@ class _TextExtractor(HTMLParser):
 
 def _book_text(filename: str, data: bytes) -> str:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if suffix in {"txt", "md", "markdown", "text"}:
+    if suffix in {"txt", "md", "markdown", "text", "csv", "json"}:
         return data.decode("utf-8", errors="replace")
     if suffix == "pdf":
         reader = PdfReader(io.BytesIO(data))

@@ -3,10 +3,17 @@
 import {
   BookOpen,
   Bot,
+  Copy,
+  Download,
+  FileText,
+  FlaskConical,
   Globe2,
   Loader2,
   MessageSquarePlus,
+  Paperclip,
+  Pencil,
   Plus,
+  Search,
   Send,
   Sparkles,
   Trash2,
@@ -17,7 +24,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge, Button, Notice, Panel, PageHeader } from "@/components/ui";
-import { api, getToken, streamChat, useApi } from "@/lib/api";
+import { api, getToken, streamChat, uploadChatFile, useApi } from "@/lib/api";
 import { when } from "@/lib/format";
 import type {
   Agent,
@@ -42,13 +49,26 @@ function Avatar({ assistant = false, room = false }: { assistant?: boolean; room
   );
 }
 
-function Brief({ block }: { block: ChatBlock }) {
+function Brief({
+  block,
+  onProject,
+  projectBusy = false,
+}: {
+  block: ChatBlock;
+  onProject?: () => void;
+  projectBusy?: boolean;
+}) {
   if (!block.sections?.length) return null;
   return (
     <div className="rounded-xl border border-signal/25 bg-signal/5 p-3.5">
       <div className="mb-3 flex items-center gap-2">
         <Sparkles size={12} className="text-signal" />
         <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-signal">research brief</p>
+        {onProject && (
+          <Button variant="secondary" size="sm" className="ml-auto" onClick={onProject} loading={projectBusy}>
+            <FlaskConical size={12} /> Start project
+          </Button>
+        )}
       </div>
       <div className="grid gap-2.5 sm:grid-cols-2">
         {block.sections.map((section) => (
@@ -102,9 +122,22 @@ export default function ChatPage() {
   const [creating, setCreating] = useState<string | null>(null);
   const [roomAgents, setRoomAgents] = useState<string[]>(DEFAULT_ROOM_AGENTS);
   const [useWeb, setUseWeb] = useState(true);
+  const [useDeep, setUseDeep] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [project, setProject] = useState<{ id: string; objective: string } | null>(null);
+  const [threadQuery, setThreadQuery] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const autoBootstrapped = useRef(false);
 
   const agents = agentData.agents ?? [];
+  const visibleThreads = threads.filter((thread) => {
+    const query = threadQuery.trim().toLowerCase();
+    if (!query) return true;
+    return `${thread.title} ${thread.agent_name} ${thread.last_message ?? ""}`.toLowerCase().includes(query);
+  });
   const roomOptions = agents.filter((agent) => agent.key !== "orchestrator");
   const validRoomAgents = roomAgents.filter((key) => roomOptions.some((agent) => agent.key === key));
   const activeThread = detail?.thread ?? threads.find((thread) => thread.id === selectedId) ?? null;
@@ -119,15 +152,11 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (!threads.length) {
-      if (signedIn && !threadsLoading) setChoosing(true);
-      return;
-    }
-    if (choosing) return;
+    if (!threads.length || choosing) return;
     if (!selectedId || !threads.some((thread) => thread.id === selectedId)) {
       setSelectedId(threads[0].id);
     }
-  }, [threads, selectedId, choosing, signedIn, threadsLoading]);
+  }, [threads, selectedId, choosing]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -193,6 +222,12 @@ export default function ChatPage() {
     }
   };
 
+  useEffect(() => {
+    if (!signedIn || threadsLoading || threads.length > 0 || autoBootstrapped.current) return;
+    autoBootstrapped.current = true;
+    void startAuto();
+  }, [signedIn, threadsLoading, threads.length]);
+
   const startRoom = async () => {
     if (!getToken() || validRoomAgents.length < 2) return;
     setCreating("room");
@@ -238,6 +273,53 @@ export default function ChatPage() {
     }
   };
 
+  const renameThread = async () => {
+    if (!activeThread || !getToken()) return;
+    const title = window.prompt("Rename this conversation", activeThread.title)?.trim();
+    if (!title || title === activeThread.title) return;
+    try {
+      const updated = await api<ChatThread>(`/chats/${activeThread.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title }),
+      });
+      setDetail((current) => (current ? { ...current, thread: { ...current.thread, ...updated } } : current));
+      await reloadThreads();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rename the conversation");
+    }
+  };
+
+  const exportThread = () => {
+    if (!detail) return;
+    const lines = [
+      `# ${detail.thread.title}`,
+      "",
+      `Exported from Nullpoint · ${new Date().toISOString()}`,
+      "",
+      ...detail.messages.map((message) => {
+        const who = message.role === "user" ? "Operator" : message.agent_name;
+        return `## ${who}${message.kind !== "message" ? ` (${message.kind})` : ""}\n\n${message.content}`;
+      }),
+      "",
+      "Research discussion only; not investment advice.",
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${detail.thread.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "nullpoint-thread"}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch {
+      setError("Clipboard access is unavailable in this browser.");
+    }
+  };
+
   const refreshDetail = useCallback(async (id: string) => {
     try {
       setDetail(await api<ChatThreadDetail>(`/chats/${id}`));
@@ -246,9 +328,63 @@ export default function ChatPage() {
     }
   }, []);
 
+  const latestSynthesis = detail?.messages
+    ? [...detail.messages].reverse().find((message) => message.kind === "synthesis")?.content
+    : undefined;
+
+  const startProject = async (idea?: string) => {
+    if (!detail || !getToken()) return;
+    const fallbackTitle = detail.thread.title.startsWith("New ") ? "" : detail.thread.title;
+    const source = (idea || draft || latestSynthesis || fallbackTitle).trim();
+    if (source.length < 8) {
+      setError("Ask a question or describe the idea first, then send it to Projects.");
+      return;
+    }
+    setProjectBusy(true);
+    setError(null);
+    try {
+      const created = await api<{ id: string; objective?: string }>("/sprints/from-chat", {
+        method: "POST",
+        body: JSON.stringify({ message: source.slice(0, 2000) }),
+      });
+      setProject({ id: created.id, objective: created.objective ?? source.slice(0, 120) });
+      await reloadThreads();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start the project");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
+  const uploadFile = async (file: File) => {
+    if (!detail || !getToken()) return;
+    setUploading(true);
+    setUploadNote(null);
+    setError(null);
+    try {
+      const result = await uploadChatFile(detail.thread.id, file);
+      await refreshDetail(detail.thread.id);
+      await reloadThreads();
+      setUploadNote(
+        `${result.filename} indexed (${result.chunks ?? 0} chunks). Ask a question about it, or press Send."`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not upload that file");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   const send = async () => {
     const content = draft.trim();
     if (!detail || !content || sending || !getToken()) return;
+    const projectCommand = content.match(/^(?:\/project|\/backtest|backtest|start\s+(?:a\s+)?project|launch\s+(?:a\s+)?project)[:\s]+(.+)$/i);
+    if (projectCommand?.[1]) {
+      setDraft("");
+      await startProject(projectCommand[1].trim());
+      return;
+    }
     const optimistic: ChatTurn = {
       id: `pending-${Date.now()}`,
       thread_id: detail.thread.id,
@@ -272,7 +408,7 @@ export default function ChatPage() {
     try {
       await streamChat(
         `/chats/${detail.thread.id}/messages/stream`,
-        { content, use_web: useWeb },
+        { content, use_web: useWeb, deep: useDeep },
         (event, data) => {
           if (event === "message" && data?.id) {
             setDetail((current) => {
@@ -295,25 +431,30 @@ export default function ChatPage() {
   };
 
   const newChatButton = (
-    <Button
-      variant="secondary"
-      onClick={() => {
-        setChoosing(true);
-        setSelectedId(null);
-        setDetail(null);
-        setError(null);
-      }}
-    >
-      <Plus size={14} /> New chat
-    </Button>
+    <div className="flex items-center gap-2">
+      <Button
+        variant="secondary"
+        onClick={() => {
+          setChoosing(true);
+          setSelectedId(null);
+          setDetail(null);
+          setError(null);
+        }}
+      >
+        <Users size={13} /> Specialists
+      </Button>
+      <Button variant="primary" onClick={() => void startAuto()} loading={creating === "auto"}>
+        <Plus size={14} /> New general chat
+      </Button>
+    </div>
   );
 
   return (
     <div>
       <PageHeader
         eyebrow="Research floor"
-        title="Agent chat"
-        description="Talk one-to-one, or open a research room where specialists see the same evidence, argue with each other, and leave one cited synthesis. A room is still not evidence: the sprint gates decide what survives."
+        title="General chat"
+        description="Ask anything. The general chat picks the specialists, gathers evidence, and works with you until there is an idea worth sending to Projects. You never have to choose an agent."
         actions={newChatButton}
       />
 
@@ -342,6 +483,17 @@ export default function ChatPage() {
               </div>
               <Badge tone="signal">live</Badge>
             </div>
+            <div className="border-b border-line/60 px-3 py-2">
+              <div className="flex items-center gap-1.5 rounded-md border border-line/70 bg-ink/40 px-2">
+                <Search size={11} className="text-muted/60" />
+                <input
+                  value={threadQuery}
+                  onChange={(event) => setThreadQuery(event.target.value)}
+                  placeholder="Search conversations"
+                  className="w-full bg-transparent py-1.5 text-[10px] text-text outline-none placeholder:text-muted/45"
+                />
+              </div>
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {threadsLoading && (
                 <div className="flex items-center gap-2 px-4 py-5 text-xs text-muted">
@@ -349,7 +501,7 @@ export default function ChatPage() {
                 </div>
               )}
               <ul className="divide-y divide-line/60">
-                {threads.map((thread) => {
+                {visibleThreads.map((thread) => {
                   const selected = thread.id === selectedId;
                   return (
                     <li key={thread.id} className="group relative">
@@ -386,9 +538,9 @@ export default function ChatPage() {
                   );
                 })}
               </ul>
-              {!threadsLoading && threads.length === 0 && (
+              {!threadsLoading && visibleThreads.length === 0 && (
                 <div className="px-4 py-8 text-center text-[11px] text-muted">
-                  No conversations yet. Open a room or pick an agent.
+                  {threads.length === 0 ? "No conversations yet. Start a general chat above." : "No conversations match that search."}
                 </div>
               )}
             </div>
@@ -398,14 +550,13 @@ export default function ChatPage() {
             {choosing || !activeThread ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-7">
                 <div className="mx-auto w-full max-w-2xl">
-                  <p className="label">New conversation</p>
+                  <p className="label">General research</p>
                   <h2 className="mt-2 text-xl font-semibold tracking-tight text-text">
-                    Put the desk in one room.
+                    Start with a question, not an org chart.
                   </h2>
                   <p className="mt-2 text-sm leading-relaxed text-muted">
-                    A research room retrieves one shared evidence bundle, then lets each specialist
-                    respond to the previous speaker. The orchestrator closes with the disagreements,
-                    citations and the next falsification test.
+                    The orchestrator reads the request, chooses the specialists, and runs the room.
+                    You only see one conversation and one decision-ready brief.
                   </p>
                   {error && <Notice tone="danger" className="mt-4">{error}</Notice>}
 
@@ -415,7 +566,7 @@ export default function ChatPage() {
                         <Sparkles size={15} />
                       </span>
                       <div>
-                        <p className="text-[13px] font-medium text-text">Auto research</p>
+                        <p className="text-[13px] font-medium text-text">General chat</p>
                         <p className="text-[10px] text-muted">
                           One general chat · the orchestrator spawns the right specialists
                         </p>
@@ -427,7 +578,7 @@ export default function ChatPage() {
                         onClick={() => void startAuto()}
                         loading={creating === "auto"}
                       >
-                        Open auto
+                        Start general chat
                       </Button>
                     </div>
                     <p className="mt-2 text-[10px] leading-relaxed text-muted/70">
@@ -487,7 +638,7 @@ export default function ChatPage() {
                     </div>
                   </div>
 
-                  <p className="label mt-6">Or talk to one specialist</p>
+                  <p className="label mt-6">Optional: direct specialist access</p>
                   {agents.length === 0 ? (
                     <Notice tone="warn" className="mt-3">
                       The agent roster is still loading. If this persists, refresh the page.
@@ -545,10 +696,58 @@ export default function ChatPage() {
                       {isRoom ? activeThread.participant_names.join(" · ") : activeThread.title}
                     </p>
                   </div>
-                  <div className="ml-auto hidden max-w-[45%] text-right text-[10px] leading-relaxed text-muted/60 md:block">
-                    {isRoom ? activeThread.purpose : (activeAgent?.purpose ?? activeThread.purpose)}
+                  <div className="ml-auto flex items-center gap-2">
+                    <div className="hidden max-w-[38%] text-right text-[10px] leading-relaxed text-muted/60 xl:block">
+                      {isRoom ? activeThread.purpose : (activeAgent?.purpose ?? activeThread.purpose)}
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void startProject(latestSynthesis ?? activeThread.title)}
+                      loading={projectBusy}
+                    >
+                      <FlaskConical size={12} /> Project
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={() => void renameThread()}
+                      className="focus-ring rounded-md border border-line/70 p-1.5 text-muted transition hover:text-text"
+                      title="Rename conversation"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportThread}
+                      className="focus-ring rounded-md border border-line/70 p-1.5 text-muted transition hover:text-text"
+                      title="Export as Markdown"
+                    >
+                      <Download size={12} />
+                    </button>
                   </div>
                 </div>
+
+                {(project || uploadNote) && (
+                  <div className="space-y-2 border-b border-line/60 px-4 py-2.5">
+                    {project && (
+                      <div className="flex items-center gap-2 rounded-lg border border-signal/25 bg-signal/5 px-3 py-2">
+                        <FlaskConical size={12} className="text-signal" />
+                        <p className="min-w-0 flex-1 truncate text-[11px] text-muted">
+                          Project queued: {project.objective}
+                        </p>
+                        <Link href={`/sprints/${project.id}`} className="shrink-0 text-[11px] font-medium text-signal hover:underline">
+                          Open project
+                        </Link>
+                      </div>
+                    )}
+                    {uploadNote && (
+                      <div className="flex items-center gap-2 rounded-lg border border-line/70 bg-slate/30 px-3 py-2">
+                        <FileText size={12} className="text-signal" />
+                        <p className="text-[11px] text-muted">{uploadNote}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
                   {detail?.messages.length === 0 && (
@@ -596,7 +795,9 @@ export default function ChatPage() {
                       const mine = message.role === "user";
                       const evidence = message.kind === "evidence";
                       const synthesis = message.kind === "synthesis";
+                      const attachment = message.kind === "attachment";
                       const brief = message.ui?.find((block) => block.type === "brief");
+                      const attachmentBlock = message.ui?.find((block) => block.type === "attachment");
                       return (
                         <div key={message.id} className={`flex gap-2.5 ${mine ? "justify-end" : ""}`}>
                           {!mine && <Avatar assistant room={isRoom && synthesis} />}
@@ -613,8 +814,24 @@ export default function ChatPage() {
                                 )}
                               </div>
                             )}
-                            {brief ? (
-                              <Brief block={brief} />
+                            {attachment ? (
+                              <div className="rounded-xl border border-line/80 bg-slate/30 px-3.5 py-2.5">
+                                <div className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-wider text-signal/80">
+                                  <FileText size={10} /> attached file
+                                </div>
+                                <p className="mt-1 text-[11px] font-medium text-text">
+                                  {attachmentBlock?.filename ?? "Uploaded document"}
+                                </p>
+                                <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
+                                  {message.content}
+                                </p>
+                              </div>
+                            ) : brief ? (
+                              <Brief
+                                block={brief}
+                                onProject={synthesis ? () => void startProject(message.content) : undefined}
+                                projectBusy={projectBusy}
+                              />
                             ) : (
                               <div
                                 className={`whitespace-pre-wrap rounded-xl border px-3.5 py-2.5 text-[12.5px] leading-relaxed ${
@@ -635,12 +852,22 @@ export default function ChatPage() {
                                 {message.content}
                               </div>
                             )}
-                            <Sources sources={message.sources ?? []} />
+                            {!attachment && <Sources sources={message.sources ?? []} />}
                             {!mine && (message.model || message.tokens_out) && !evidence && (
-                              <p className="mt-1 font-mono text-[9px] text-muted/45">
-                                {message.model ?? "model"} · {message.tokens_in ?? 0} in /{" "}
-                                {message.tokens_out ?? 0} out
-                              </p>
+                              <div className="mt-1 flex items-center gap-2 font-mono text-[9px] text-muted/45">
+                                <span>
+                                  {message.model ?? "model"} · {message.tokens_in ?? 0} in /{" "}
+                                  {message.tokens_out ?? 0} out
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => void copyMessage(message.content)}
+                                  className="focus-ring rounded p-0.5 text-muted/45 transition hover:text-text"
+                                  title="Copy message"
+                                >
+                                  <Copy size={10} />
+                                </button>
+                              </div>
                             )}
                           </div>
                           {mine && <Avatar />}
@@ -665,6 +892,16 @@ export default function ChatPage() {
                 <div className="border-t border-line/70 p-3">
                   {error && <Notice tone="danger" className="mb-2">{error}</Notice>}
                   <div className="rounded-xl border border-line bg-ink/60 p-2 focus-within:border-signal/40">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.epub,.txt,.md,.markdown,.csv,.json"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void uploadFile(file);
+                      }}
+                    />
                     <textarea
                       value={draft}
                       onChange={(event) => setDraft(event.target.value)}
@@ -674,29 +911,59 @@ export default function ChatPage() {
                           void send();
                         }
                       }}
-                      placeholder={isRoom ? "Ask the room…" : `Message the ${activeThread.agent_name.toLowerCase()}…`}
+                      placeholder={isRoom ? "Ask the desk a question, attach a file, or type /project <idea>…" : `Message the ${activeThread.agent_name.toLowerCase()}…`}
                       className="min-h-[54px] w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-relaxed text-text outline-none placeholder:text-muted/50"
                       disabled={sending}
                     />
-                    <div className="flex items-center justify-between gap-2 px-1">
+                    <div className="flex flex-wrap items-center gap-2 px-1">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading || sending}
+                        className="focus-ring inline-flex items-center gap-1 rounded-md border border-line/80 px-2 py-1 text-[10px] text-muted transition hover:border-signal/40 hover:text-text disabled:opacity-50"
+                        title="Attach a PDF, EPUB, text or Markdown file"
+                      >
+                        {uploading ? <Loader2 size={11} className="animate-spin" /> : <Paperclip size={11} />}
+                        File
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void startProject()}
+                        disabled={projectBusy || sending}
+                        className="focus-ring inline-flex items-center gap-1 rounded-md border border-line/80 px-2 py-1 text-[10px] text-muted transition hover:border-signal/40 hover:text-text disabled:opacity-50"
+                        title="Send the idea to Projects and start a bounded backtest"
+                      >
+                        {projectBusy ? <Loader2 size={11} className="animate-spin" /> : <FlaskConical size={11} />}
+                        Project / backtest
+                      </button>
                       {isRoom ? (
-                        <label className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-muted/55">
+                        <label className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-wider text-muted/55">
                           <input
                             type="checkbox"
                             checked={useWeb}
                             onChange={(event) => setUseWeb(event.target.checked)}
                             className="h-3 w-3 accent-signal"
                           />
-                          Exa + Firecrawl evidence
+                          web
                         </label>
                       ) : (
-                        <p className="font-mono text-[9px] uppercase tracking-wider text-muted/50">
-                          Enter to send · Shift+Enter for a new line
-                        </p>
+                        <span className="font-mono text-[9px] uppercase tracking-wider text-muted/40">
+                          Enter to send
+                        </span>
                       )}
+                      <label className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-wider text-muted/55">
+                        <input
+                          type="checkbox"
+                          checked={useDeep}
+                          onChange={(event) => setUseDeep(event.target.checked)}
+                          className="h-3 w-3 accent-signal"
+                        />
+                        deep
+                      </label>
                       <Button
                         variant="primary"
                         size="sm"
+                        className="ml-auto"
                         onClick={() => void send()}
                         loading={sending}
                         disabled={!draft.trim()}
@@ -707,8 +974,8 @@ export default function ChatPage() {
                   </div>
                   <p className="mt-2 text-[10px] leading-relaxed text-muted/60">
                     {isRoom
-                      ? "Room messages are visible and replayable. Sources are evidence, not a backtest; no live order routing exists."
-                      : "Chat is research discussion, not evidence. Backtests must still clear the sprint gates; no live order routing exists."}
+                      ? "The desk streams evidence and each specialist, then saves the brief. Project / backtest sends the idea to the sprint gates; no live order routing exists."
+                      : "Chat is research discussion, not evidence. Project / backtest sends the idea to Projects and still has to clear the sprint gates."}
                   </p>
                 </div>
               </>

@@ -53,10 +53,11 @@ export interface Message {
 }
 
 export interface ChatBlock {
-  type: "brief" | "evidence" | string;
+  type: "brief" | "evidence" | "attachment" | string;
   sections?: Array<{ heading: string; body: string }>;
   count?: number;
   providers?: string[];
+  filename?: string;
 }
 
 export interface KnowledgeStats {

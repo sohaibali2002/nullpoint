@@ -4,11 +4,12 @@ from typing import Any
 
 import pytest
 from api.config import Settings
-from api.models import Organization, Sprint
+from api.models import Memory, Organization, Sprint
 from sqlalchemy.orm import Session
 
 from agents import knowledge, search
 from agents.bus import BudgetGuard, MessageBus
+from agents.embeddings import embed
 from agents.llm import build_llm
 from agents.tools import AgentSpec, ToolContext
 
@@ -174,6 +175,41 @@ def test_voyage_embeddings_are_used_when_key_is_present(monkeypatch, db_session)
     hits = kb.search("testable predictions")
     assert hits
     assert hits[0]["embedding_model"] == "voyage-3-large"
+
+
+def test_recall_skips_vectors_from_another_embedding_space(db_session):
+    org, sprint = _seed(db_session)
+    db_session.add(
+        Memory(
+            org_id=org.id,
+            kind="knowledge",
+            title="Voyage chunk",
+            body="A book passage embedded with Voyage.",
+            embedding=[0.01] * 1024,
+        )
+    )
+    db_session.add(
+        Memory(
+            org_id=org.id,
+            kind="room_lesson",
+            title="Local lesson",
+            body="A room conclusion embedded locally.",
+            embedding=embed("A room conclusion embedded locally."),
+        )
+    )
+    db_session.commit()
+    ctx = ToolContext(
+        db_session,
+        org.id,
+        sprint.id,
+        settings=Settings(app_env="test", database_url="sqlite://"),
+        bus=MessageBus(db_session, org.id, sprint.id),
+        budget=BudgetGuard(1.0, 10, 2),
+        allow_network=False,
+    )
+    recalled = ctx.recall("room conclusion", limit=5)
+    assert recalled
+    assert all(item["kind"] != "knowledge" for item in recalled)
 
 
 def test_deep_research_tool_returns_knowledge_without_network(db_session, tmp_path):
