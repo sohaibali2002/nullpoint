@@ -289,6 +289,16 @@ def test_chat_stream_emits_persisted_messages(api, monkeypatch):
     assert "event: error" not in text
 
 
+def test_greetings_do_not_trigger_web_research():
+    from api.services.chat import _query_is_researchable
+
+    assert not _query_is_researchable("hi")
+    assert not _query_is_researchable("hello there")
+    assert not _query_is_researchable("thanks")
+    assert _query_is_researchable("momentum")
+    assert _query_is_researchable("what does insider buying predict")
+
+
 def test_natural_language_universe_is_not_a_bare_ticker():
     from api.routers.research import LARGE_CAPS, SECTOR_ETFS, parse_universe
 

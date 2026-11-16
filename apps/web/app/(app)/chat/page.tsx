@@ -141,6 +141,8 @@ export default function ChatPage() {
   const roomOptions = agents.filter((agent) => agent.key !== "orchestrator");
   const validRoomAgents = roomAgents.filter((key) => roomOptions.some((agent) => agent.key === key));
   const activeThread = detail?.thread ?? threads.find((thread) => thread.id === selectedId) ?? null;
+  const preferredThread =
+    threads.find((thread) => thread.mode === "auto") ?? threads.find((thread) => thread.mode === "room") ?? null;
   const isRoom = activeThread?.mode === "room" || activeThread?.mode === "auto";
   const isAuto = activeThread?.mode === "auto";
   const activeAgent = agents.find((agent) => agent.key === activeThread?.agent);
@@ -154,9 +156,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (!threads.length || choosing) return;
     if (!selectedId || !threads.some((thread) => thread.id === selectedId)) {
-      setSelectedId(threads[0].id);
+      setSelectedId((preferredThread ?? threads[0]).id);
     }
-  }, [threads, selectedId, choosing]);
+  }, [threads, selectedId, choosing, preferredThread]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -223,10 +225,10 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
-    if (!signedIn || threadsLoading || threads.length > 0 || autoBootstrapped.current) return;
+    if (!signedIn || threadsLoading || preferredThread || autoBootstrapped.current) return;
     autoBootstrapped.current = true;
     void startAuto();
-  }, [signedIn, threadsLoading, threads.length]);
+  }, [signedIn, threadsLoading, preferredThread?.id]);
 
   const startRoom = async () => {
     if (!getToken() || validRoomAgents.length < 2) return;

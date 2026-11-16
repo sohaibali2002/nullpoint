@@ -30,7 +30,7 @@ const NAV = [
     label: "Research",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/chat", label: "Agent chat", icon: MessageSquare },
+      { href: "/chat", label: "General chat", icon: MessageSquare },
       { href: "/knowledge", label: "Knowledge", icon: Library },
       { href: "/sprints", label: "Projects", icon: Activity },
       { href: "/strategies", label: "Strategies", icon: BarChart3 },
@@ -57,7 +57,7 @@ const NAV = [
 
 const TITLES: Array<[string, string, string]> = [
   ["/dashboard", "Dashboard", "Research overview"],
-  ["/chat", "Agent chat", "Direct line"],
+  ["/chat", "General chat", "Research floor"],
   ["/knowledge", "Knowledge library", "Voyage embeddings"],
   ["/sprints/", "Project replay", "Agent audit trail"],
   ["/sprints", "Projects", "Live research"],

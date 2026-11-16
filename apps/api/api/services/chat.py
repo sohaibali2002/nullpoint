@@ -55,6 +55,21 @@ MAX_KNOWLEDGE_HITS = 5
 MAX_MEMORY_HITS = 3
 MAX_WEB_SOURCES = 5
 MAX_ROOM_PARTICIPANTS = 5
+TRIVIAL_QUERIES = {
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "sup",
+    "thanks",
+    "thank you",
+    "ok",
+    "okay",
+    "test",
+    "testing",
+    "good morning",
+    "good evening",
+}
 MIN_ROOM_PARTICIPANTS = 2
 DEFAULT_ROOM_PARTICIPANTS = ("ideator", "data_engineer", "skeptic", "risk_analyst")
 DEEP_WEB_SOURCES = 8
@@ -269,9 +284,20 @@ def _memory_context(db: Session, org_id: str, query: str) -> list[dict[str, Any]
     ]
 
 
+def _query_is_researchable(query: str) -> bool:
+    """Do not turn greetings or one-word chatter into a web-research bill."""
+    text = " ".join(str(query or "").lower().split())
+    if not text or text in TRIVIAL_QUERIES:
+        return False
+    words = [word for word in re.findall(r"[a-z0-9]+", text) if len(word) > 2]
+    if words and words[0] in {"hi", "hello", "hey", "thanks", "thank"} and len(words) <= 3:
+        return False
+    return len(words) >= 2 or (len(words) == 1 and len(words[0]) >= 5)
+
+
 def _web_sources(query: str, settings: Settings, *, limit: int = MAX_WEB_SOURCES) -> list[dict[str, Any]]:
     """Retrieve one evidence bundle for the room.  Failure degrades honestly to no sources."""
-    if not settings.allow_network:
+    if not settings.allow_network or not _query_is_researchable(query):
         return []
     limit = max(1, min(int(limit), DEEP_WEB_SOURCES))
     try:
@@ -657,6 +683,7 @@ def generate_room_round(
     if latest_user is None:
         raise ValueError("cannot run a room round without a user question")
 
+    researchable = _query_is_researchable(latest_user.content)
     sources = (
         _web_sources(
             latest_user.content,
@@ -667,7 +694,7 @@ def generate_room_round(
         else []
     )
     evidence = ""
-    if use_web:
+    if use_web and (sources or researchable):
         if sources:
             evidence = (
                 f"I retrieved {len(sources)} external source(s) for this round. "
