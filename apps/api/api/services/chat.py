@@ -182,7 +182,13 @@ def _model_for(agent: str, settings: Settings) -> str:
     }.get(spec.model_key, settings.model_worker)
 
 
-def _client_for(agent: str, settings: Settings, *, model: str | None = None) -> LLMClient:
+def _client_for(
+    agent: str,
+    settings: Settings,
+    *,
+    model: str | None = None,
+    session_id: str | None = None,
+) -> LLMClient:
     selected = model or _model_for(agent, settings)
     return build_llm(
         selected,
@@ -190,6 +196,8 @@ def _client_for(agent: str, settings: Settings, *, model: str | None = None) -> 
         settings.llm_key,
         base_url=settings.llm_base_url,
         timeout=settings.llm_timeout_seconds,
+        session_id=session_id,
+        app_url=settings.app_base_url,
     )
 
 
@@ -370,7 +378,7 @@ def _maybe_compact(db: Session, thread: ChatThread, settings: Settings) -> None:
         f"{item.role}/{item.agent}: {item.content[:900]}" for item in older[-20:]
     )[:18_000]
     try:
-        client = _client_for("librarian", settings)
+        client = _client_for("librarian", settings, session_id=thread.id)
         prior = getattr(thread, "summary", "") or ""
         response = client.complete(
             system=(
@@ -508,7 +516,7 @@ def _agent_turn(
 ) -> ChatMessage:
     spec = AGENT_SPECS.get(agent) or AGENT_SPECS["orchestrator"]
     selected_model = model or model_for_task(agent, task or instruction, settings, deep=deep)
-    client = _client_for(agent, settings, model=selected_model)
+    client = _client_for(agent, settings, model=selected_model, session_id=thread.id)
     system = spec.system_prompt + "\n\n" + CHAT_PREAMBLE + "\n\n" + instruction
     if deep:
         system += (

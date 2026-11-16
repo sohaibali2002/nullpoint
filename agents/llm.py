@@ -14,11 +14,24 @@ from typing import Any, Protocol
 
 import httpx
 
+# Free models are the default when OpenRouter is selected.  `openrouter/free` is the
+# maintained free-model router; the two concrete models are free fallbacks that support
+# tools and structured outputs.  Keep this list short (OpenRouter accepts at most three
+# entries in `models`).
+OPENROUTER_FREE_MODEL = "openrouter/free"
+OPENROUTER_FREE_FALLBACKS: tuple[str, ...] = (
+    "inclusionai/ling-3.2-flash:free",
+    "baidu/ernie-5.5-flash-preview:free",
+)
+OPENROUTER_APP_URL = "https://nullpoint-web.vercel.app"
+OPENROUTER_APP_TITLE = "Nullpoint"
+
 # USD per 1M tokens (input, output). Placeholders for budget estimates only.
 PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-5-5": (15.0, 75.0),
     "claude-sonnet-5-5": (3.0, 15.0),
     "claude-haiku-5-5": (0.8, 4.0),
+    "openrouter/free": (0.0, 0.0),
 }
 DEFAULT_PRICE = (3.0, 15.0)
 
@@ -40,6 +53,8 @@ OPENAI_COMPATIBLE_BASE_URLS: dict[str, str] = {
 
 
 def cost_for(model: str, tokens_in: int, tokens_out: int) -> float:
+    if model == OPENROUTER_FREE_MODEL or model.endswith(":free"):
+        return 0.0
     price_in, price_out = PRICING.get(model, DEFAULT_PRICE)
     return (tokens_in / 1_000_000) * price_in + (tokens_out / 1_000_000) * price_out
 
@@ -66,6 +81,7 @@ class LLMClient(Protocol):
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int = 1200,
         temperature: float = 0.2,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse: ...
 
 
@@ -87,7 +103,11 @@ class AnthropicClient:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.2,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
+        # The native Anthropic client does not take the OpenAI response_format object;
+        # callers use OpenRouter for that capability.
+        _ = response_format
         response = self._client.messages.create(
             model=self.model,
             system=system,
@@ -134,6 +154,8 @@ class OpenAICompatibleClient:
         timeout: float = 90.0,
         max_tokens: int = 1200,
         extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
+        modern_tokens: bool = False,
     ) -> None:
         self.model = model
         self.max_tokens = max_tokens
@@ -141,6 +163,8 @@ class OpenAICompatibleClient:
         self.timeout = timeout
         self.api_key = api_key
         self.extra_headers = extra_headers or {}
+        self.extra_body = dict(extra_body or {})
+        self.modern_tokens = modern_tokens
 
     @property
     def endpoint(self) -> str:
@@ -156,18 +180,33 @@ class OpenAICompatibleClient:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.2,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
         headers = {"content-type": "application/json", **self.extra_headers}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
+        token_field = "max_completion_tokens" if self.modern_tokens else "max_tokens"
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, *messages],
-            "max_tokens": max_tokens or self.max_tokens,
+            token_field: max_tokens or self.max_tokens,
             "temperature": temperature,
         }
         if tools:
             payload["tools"] = tools
+        if response_format:
+            payload["response_format"] = response_format
+        if self.extra_body:
+            extra = dict(self.extra_body)
+            # OpenRouter's `models` list is the failover chain.  Do not also send a
+            # single `model` field when the ordered list is present.
+            if extra.get("models"):
+                payload.pop("model", None)
+            provider = dict(extra.get("provider") or {})
+            if tools and provider and "require_parameters" not in provider:
+                provider["require_parameters"] = True
+                extra["provider"] = provider
+            payload.update(extra)
         response = httpx.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout)
         response.raise_for_status()
         data = response.json()
@@ -190,12 +229,13 @@ class OpenAICompatibleClient:
         usage = data.get("usage") or {}
         tokens_in = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
         tokens_out = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        actual_model = str(data.get("model") or self.model)
         return LLMResponse(
             text=str(message.get("content") or ""),
-            model=self.model,
+            model=actual_model,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
-            cost_usd=cost_for(self.model, tokens_in, tokens_out),
+            cost_usd=cost_for(actual_model, tokens_in, tokens_out),
             tool_calls=calls,
             stop_reason=str(choice.get("finish_reason") or "stop"),
         )
@@ -215,7 +255,9 @@ class MockLLM:
         tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.2,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
+        _ = tools, max_tokens, temperature, response_format
         prompt = str(messages[-1].get("content", "")) if messages else ""
         tokens_in = max(1, len(prompt) // 4)
         text = (
@@ -238,6 +280,11 @@ def build_llm(
     *,
     base_url: str | None = None,
     timeout: float = 90.0,
+    session_id: str | None = None,
+    models: list[str] | None = None,
+    provider_preferences: dict[str, Any] | None = None,
+    context_compression: bool = True,
+    app_url: str | None = None,
 ) -> LLMClient:
     """Build the selected provider without importing every vendor SDK.
 
@@ -263,7 +310,36 @@ def build_llm(
             raise RuntimeError(
                 f"LLM_PROVIDER={key} requires LLM_API_KEY or the provider-specific API key"
             )
-        return OpenAICompatibleClient(model=model, api_key=api_key, base_url=resolved, timeout=timeout)
+        extra_body: dict[str, Any] = {}
+        extra_headers: dict[str, str] = {}
+        is_openrouter = key == "openrouter"
+        if is_openrouter:
+            ordered = list(models or [])
+            if not ordered and (model == OPENROUTER_FREE_MODEL or model.endswith(":free")):
+                ordered = [model, *OPENROUTER_FREE_FALLBACKS]
+            if ordered:
+                extra_body["models"] = list(dict.fromkeys(ordered))[:3]
+            provider_preferences = {"allow_fallbacks": True, **(provider_preferences or {})}
+            extra_body["provider"] = provider_preferences
+            if session_id:
+                extra_body["session_id"] = session_id[:256]
+            if context_compression:
+                extra_body["plugins"] = [
+                    {"id": "context-compression", "engine": "middle-out"}
+                ]
+            extra_headers = {
+                "HTTP-Referer": app_url or OPENROUTER_APP_URL,
+                "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+            }
+        return OpenAICompatibleClient(
+            model=model,
+            api_key=api_key,
+            base_url=resolved,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            modern_tokens=is_openrouter,
+        )
     raise ValueError(
         f"unknown LLM provider {provider!r}; use mock, anthropic, one of "
         f"{sorted(OPENAI_COMPATIBLE_BASE_URLS)} or custom with LLM_BASE_URL"

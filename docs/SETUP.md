@@ -82,10 +82,13 @@ uv pip install -e ".[pdf]"     # PDF tearsheets (optional path)
 Every integration below is optional and degrades honestly when absent:
 
 ```bash
-# Any OpenAI-compatible LLM (or use LLM_PROVIDER=anthropic)
+# Free OpenRouter models are the default; no paid model is used unless you set one
 export LLM_PROVIDER=openrouter
+export OPENROUTER_API_KEY=...
+# MODEL_* defaults to openrouter/free. Set a specific free model if you prefer, for example
+# MODEL_ORCHESTRATOR=inclusionai/ling-3.2-flash:free
 # or: openai | groq | deepseek | mistral | xai | together | fireworks | gemini | ollama
-export LLM_API_KEY=...
+# LLM_API_KEY is the generic key for non-OpenRouter OpenAI-compatible providers.
 # export LLM_BASE_URL=http://localhost:8000/v1   # for custom/vLLM/LM Studio/Azure
 
 export VOYAGE_API_KEY=...       # Voyage knowledge-base embeddings; local fallback

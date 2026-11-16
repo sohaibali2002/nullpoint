@@ -356,7 +356,7 @@ def main() -> int:
                 "runtime_note": (
                     "The Freebuff CLI 0.2.36 has no headless prompt mode and no signed-in session, "
                     "so the AI-authored spec ran through the platform engine rather than a CLI LLM call. "
-                    "Set LLM_PROVIDER=anthropic to power the full agent roster."
+                    "Set LLM_PROVIDER=openrouter (free models) or anthropic to power the full agent roster."
                 ),
             },
             "disclaimer": "Research only. Not investment advice. Backtests are hypotheses, not forecasts.",

@@ -57,8 +57,9 @@ make worker   # Arq worker (sprint queue + nightly drift)
 make web      # http://localhost:3000
 ```
 
-No Anthropic key? Set `LLM_PROVIDER=mock` (the default in tests). The mock provider runs the real
-tools, backtests and validation gates deterministically.
+No key? Set `LLM_PROVIDER=mock` (the default in tests). The mock provider runs the real tools,
+backtests and validation gates deterministically. With `OPENROUTER_API_KEY` set, `LLM_PROVIDER=auto`
+uses free OpenRouter models by default; set `MODEL_*` to a paid model only if you want one.
 
 ### One command demo
 
@@ -204,9 +205,9 @@ See `.env.example`. Important variables:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | sqlite in dev | Postgres in production (`postgresql+psycopg://…`) |
-| `LLM_PROVIDER` | `mock` | `mock`, `anthropic`, an OpenAI-compatible provider, or `custom` |
+| `LLM_PROVIDER` | `auto` | auto prefers free OpenRouter; `mock`, `anthropic`, an OpenAI-compatible provider, or `custom` |
 | `LLM_API_KEY` / `LLM_BASE_URL` | — | generic key and optional OpenAI-compatible base URL |
-| `MODEL_ORCHESTRATOR/WORKER/SKEPTIC/CHEAP` | Claude models | model slots per role |
+| `MODEL_ORCHESTRATOR/WORKER/SKEPTIC/CHEAP` | `auto` | resolves to free OpenRouter models for OpenRouter, role defaults otherwise |
 | `VOYAGE_API_KEY` / `VOYAGE_MODEL` | — | Voyage knowledge-base embeddings; local fallback without it |
 | `TAVILY_API_KEY` / `EXA_API_KEY` / `FIRECRAWL_API_KEY` | — | concurrent deep-research providers |
 | `MAX_WORKERS` | `0` | 0 auto-detects CPU/cgroup budget; 1 forces sequential |

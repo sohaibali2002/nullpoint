@@ -157,6 +157,8 @@ class ToolContext:
                 self.settings.llm_key,
                 base_url=self.settings.llm_base_url,
                 timeout=self.settings.llm_timeout_seconds,
+                session_id=self.sprint_id,
+                app_url=self.settings.app_base_url,
             )
         return self._llms[model_key]
 

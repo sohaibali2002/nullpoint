@@ -23,7 +23,9 @@ payloads use `JSON` with a Postgres JSONB variant so both dialects work.
 ### D4. Deterministic offline mode is a first-class path
 `LLM_PROVIDER=mock` yields a scripted but genuine research loop: the orchestrator still calls
 tools, runs real backtests and real validation. This makes demos reproducible, tests hermetic, and
-the noise gate meaningful without spending tokens. Production sets `LLM_PROVIDER=anthropic`.
+the noise gate meaningful without spending tokens. Production defaults to `LLM_PROVIDER=auto`, which
+uses free OpenRouter models when `OPENROUTER_API_KEY` is present, then other configured providers, and
+falls back to the mock when no key exists.
 
 ### D5. Auth is a deliberate stub, structured for replacement
 Local users (argon2-grade PBKDF2-SHA256, 600k iterations), JWT access tokens, hashed API keys,

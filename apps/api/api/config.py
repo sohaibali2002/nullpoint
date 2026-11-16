@@ -14,6 +14,10 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Kept local to avoid importing the agents package (and its API/DB imports) during
+# configuration loading.  The adapter has the same value in agents.llm.
+OPENROUTER_FREE_MODEL = "openrouter/free"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -50,13 +54,17 @@ class Settings(BaseSettings):
     xai_api_key: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
     llm_api_key: SecretStr | None = None
-    llm_provider: str = "mock"
+    # `auto` chooses OpenRouter when OPENROUTER_API_KEY is present, then the other
+    # provider keys, and finally the deterministic mock.  Explicit values always win.
+    llm_provider: str = "auto"
     llm_base_url: str | None = None
     llm_timeout_seconds: float = Field(default=90.0, ge=5, le=600)
-    model_orchestrator: str = "claude-opus-5-5"
-    model_worker: str = "claude-sonnet-5-5"
-    model_cheap: str = "claude-haiku-5-5"
-    model_skeptic: str = "claude-opus-5-5"
+    # `auto` resolves to the provider default below.  OpenRouter defaults are free models;
+    # set these explicitly to use paid models or a specific free model.
+    model_orchestrator: str = "auto"
+    model_worker: str = "auto"
+    model_cheap: str = "auto"
+    model_skeptic: str = "auto"
     llm_monthly_budget_usd: float = 250.0
     sprint_budget_usd: float = 8.0
     sprint_wall_clock_minutes: int = 45
@@ -139,6 +147,40 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _resolve_llm_profile(self) -> Settings:
+        """Resolve provider and model-slot defaults before production guards run."""
+        provider = self.llm_provider.strip().lower()
+        if provider == "auto":
+            # Prefer the free OpenRouter path.  The other keys preserve existing
+            # single-provider deployments; no key means the honest offline mock.
+            def configured(secret: SecretStr | None) -> bool:
+                return bool(secret and secret.get_secret_value().strip())
+
+            if configured(self.openrouter_api_key):
+                provider = "openrouter"
+            elif configured(self.anthropic_api_key):
+                provider = "anthropic"
+            elif configured(self.openai_api_key):
+                provider = "openai"
+            else:
+                provider = "mock"
+            self.llm_provider = provider
+
+        defaults = {
+            "openrouter": OPENROUTER_FREE_MODEL,
+            "anthropic": "claude-opus-5-5",
+            "openai": "gpt-4o-mini",
+            "mock": "mock-scripted",
+        }
+        default_model = defaults.get(provider, "gpt-4o-mini")
+        # The cheap slot is deliberately the same free router under OpenRouter; the
+        # router already chooses a smaller/cheaper model when the task is simple.
+        for field in ("model_orchestrator", "model_worker", "model_cheap", "model_skeptic"):
+            if not getattr(self, field) or getattr(self, field).strip().lower() == "auto":
+                setattr(self, field, default_model)
+        return self
+
+    @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.app_env == "production":
             if self.secret_key.get_secret_value() == "dev-insecure-secret-change-me-32-chars-minimum":
@@ -173,8 +215,9 @@ class Settings(BaseSettings):
     @property
     def llm_key(self) -> str | None:
         """The key for the selected provider, with LLM_API_KEY as the generic override."""
-        if self.llm_api_key:
-            return self.llm_api_key.get_secret_value()
+        generic = self.llm_api_key.get_secret_value().strip() if self.llm_api_key else ""
+        if generic:
+            return generic
         provider = self.llm_provider.strip().lower()
         mapping = {
             "anthropic": self.anthropic_api_key,
@@ -188,7 +231,8 @@ class Settings(BaseSettings):
             "google": self.gemini_api_key,
         }
         secret = mapping.get(provider)
-        return secret.get_secret_value() if secret else None
+        value = secret.get_secret_value().strip() if secret else ""
+        return value or None
 
     @property
     def voyage_key(self) -> str | None:

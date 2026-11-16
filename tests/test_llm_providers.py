@@ -69,6 +69,86 @@ def test_openai_compatible_client_normalizes_text_and_tool_calls(monkeypatch):
     assert response.stop_reason == "tool_calls"
 
 
+def test_openrouter_free_defaults_use_ordered_free_models(monkeypatch):
+    from api.config import Settings
+
+    settings = Settings(
+        app_env="test",
+        llm_provider="openrouter",
+        openrouter_api_key="or-test-key",
+        model_orchestrator="auto",
+        model_worker="auto",
+        model_cheap="auto",
+        model_skeptic="auto",
+    )
+    assert settings.model_orchestrator == "openrouter/free"
+    assert settings.model_worker == "openrouter/free"
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> _Response:
+        captured.update({"url": url, **kwargs})
+        return _Response(
+            {
+                "model": "inclusionai/ling-3.2-flash:free",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            }
+        )
+
+    monkeypatch.setattr(llm_module.httpx, "post", fake_post)
+    client = llm_module.build_llm(
+        settings.model_worker,
+        settings.llm_provider,
+        settings.llm_key,
+        session_id="thread-1",
+    )
+    response = client.complete(
+        system="Be skeptical.",
+        messages=[{"role": "user", "content": "Review this."}],
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        response_format={"type": "json_object"},
+    )
+
+    payload = captured["json"]
+    assert "model" not in payload
+    assert payload["models"][0] == "openrouter/free"
+    assert "inclusionai/ling-3.2-flash:free" in payload["models"]
+    assert payload["provider"]["allow_fallbacks"] is True
+    assert payload["provider"]["require_parameters"] is True
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["plugins"] == [{"id": "context-compression", "engine": "middle-out"}]
+    assert payload["session_id"] == "thread-1"
+    assert "max_completion_tokens" in payload
+    assert "max_tokens" not in payload
+    assert captured["headers"]["HTTP-Referer"]
+    assert captured["headers"]["X-OpenRouter-Title"] == "Nullpoint"
+    assert response.model == "inclusionai/ling-3.2-flash:free"
+    assert response.cost_usd == 0.0
+
+
+def test_auto_provider_prefers_openrouter_when_key_is_present():
+    from api.config import Settings
+
+    settings = Settings(
+        app_env="test",
+        llm_provider="auto",
+        openrouter_api_key="or-test-key",
+        model_orchestrator="auto",
+        model_worker="auto",
+        model_cheap="auto",
+        model_skeptic="auto",
+    )
+    assert settings.llm_provider == "openrouter"
+    assert settings.model_skeptic == "openrouter/free"
+
+
+def test_free_models_cost_zero_even_with_numeric_pricing():
+    assert llm_module.cost_for("openrouter/free", 10_000, 2_000) == 0.0
+    assert llm_module.cost_for("vendor/model:free", 10_000, 2_000) == 0.0
+    assert llm_module.cost_for("vendor/model", 1_000_000, 0) > 0
+
+
 def test_custom_provider_requires_a_base_url():
     with pytest.raises(RuntimeError, match="LLM_BASE_URL"):
         llm_module.build_llm("some-model", "custom", "key")
