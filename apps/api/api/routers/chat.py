@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
 from collections.abc import AsyncIterator
@@ -169,7 +170,13 @@ def delete_thread(
     return Response(status_code=204)
 
 
-def _run_generation(thread_id: str, use_web: bool, deep: bool, holder: dict[str, str]) -> None:
+def _run_generation(
+    thread_id: str,
+    use_web: bool,
+    deep: bool,
+    holder: dict[str, str],
+    on_delta: chat_service.DeltaSink | None = None,
+) -> None:
     session = SessionLocal()
     try:
         thread = session.get(ChatThread, thread_id)
@@ -178,11 +185,11 @@ def _run_generation(thread_id: str, use_web: bool, deep: bool, holder: dict[str,
             return
         if thread.mode in {"room", "auto"}:
             chat_service.generate_room_round(
-                session, thread, settings=settings, use_web=use_web, deep=deep
+                session, thread, settings=settings, use_web=use_web, deep=deep, on_delta=on_delta
             )
         else:
             chat_service.generate_reply(
-                session, thread, settings=settings, use_web=use_web, deep=deep
+                session, thread, settings=settings, use_web=use_web, deep=deep, on_delta=on_delta
             )
     except Exception as exc:  # surfaced to the client as an SSE error event
         holder["error"] = f"{type(exc).__name__}: {exc}"
@@ -281,14 +288,39 @@ def stream_message(
 
     async def event_source() -> AsyncIterator[str]:
         holder: dict[str, str] = {}
+        loop = asyncio.get_running_loop()
+        deltas: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def on_delta(agent: str, name: str, text: str) -> None:
+            # Called from the generation thread; hand the chunk to the event loop safely.
+            # RuntimeError means the loop is gone because the client disconnected.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(
+                    deltas.put_nowait, {"agent": agent, "agent_name": name, "text": text}
+                )
+
         worker = threading.Thread(
             target=_run_generation,
-            args=(run_id, payload.use_web, payload.deep, holder),
+            args=(run_id, payload.use_web, payload.deep, holder, on_delta),
             daemon=True,
         )
         worker.start()
         yield f"event: start\ndata: {json.dumps({'thread_id': run_id})}\n\n"
         while True:
+            streamed = False
+            while True:
+                try:
+                    delta = deltas.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                streamed = True
+                yield f"event: delta\ndata: {json.dumps(delta)}\n\n"
+            if not streamed:
+                try:
+                    delta = await asyncio.wait_for(deltas.get(), timeout=0.2)
+                    yield f"event: delta\ndata: {json.dumps(delta)}\n\n"
+                except TimeoutError:
+                    pass
             session = SessionLocal()
             try:
                 rows = (
@@ -308,8 +340,14 @@ def stream_message(
                 seen.add(row.id)
                 yield f"event: message\ndata: {json.dumps(chat_service.message_dict(row), default=str)}\n\n"
             if not worker.is_alive():
+                while True:
+                    try:
+                        delta = deltas.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    yield f"event: delta\ndata: {json.dumps(delta)}\n\n"
                 break
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(0.25)
         if holder.get("error"):
             yield f"event: error\ndata: {json.dumps({'detail': holder['error']})}\n\n"
         yield f"event: done\ndata: {json.dumps({'thread_id': run_id})}\n\n"

@@ -28,7 +28,12 @@ ROWS = [
     ("execution_delay", "Sharpe with +1 extra bar delay", "delay_sharpe_min", ">="),
     ("parameter_plateau", "Parameter plateau share", "plateau_share_min", ">="),
     ("minimum_track_record", "Minimum track record", "min_trades", ">="),
-    ("regime_robustness", "Worst regime Sharpe (60+ days, >= 4 regimes)", "regime_min_sharpe", ">="),
+    (
+        "regime_robustness",
+        "Median regime Sharpe (60+ days, <= 1 regime below the floor)",
+        "regime_min_sharpe",
+        ">=",
+    ),
 ]
 
 

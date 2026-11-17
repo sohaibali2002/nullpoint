@@ -36,6 +36,29 @@ is no org parameter. Errors use `{"detail": "..."}` with conventional status cod
 | POST | `/knowledge` | `{title,body,source,url,tags}`; chunks + Voyage/local embeddings |
 | GET | `/knowledge/search?q=&limit=&tags=` | Semantic tenant-scoped knowledge search |
 
+## Agent chat
+
+A thread is `solo` (one specialist), `room` (named specialists) or `auto` (the orchestrator picks the
+team). Every assistant message carries `ui`: UI specs the agent authored and the client renders
+(`metrics`, `table`, `checklist`, `chart`, `gates`, `callout`, `brief`, `evidence`, `attachment`).
+Malformed specs are dropped server-side and never shown as raw JSON.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/chats` | Threads for the signed-in user |
+| POST | `/chats` | `{auto:true}` · `{agents:[2-5]}` · `{agent}` · optional `title` |
+| GET | `/chats/{id}` | Thread + ordered turns with `ui` blocks and sources |
+| PATCH | `/chats/{id}` | Rename |
+| DELETE | `/chats/{id}` | Delete thread and its turns |
+| POST | `/chats/{id}/upload` | Multipart file; extracted text is indexed for the desk |
+| POST | `/chats/{id}/messages` | Blocking turn; returns the whole thread |
+| POST | `/chats/{id}/messages/stream` | SSE: `start`, `delta`, `message`, `error`, `done` |
+
+`delta` carries `{agent, agent_name, text}` — a token chunk from whoever is speaking. `message` carries
+a persisted turn in the same shape as `GET /chats/{id}`. A room round emits evidence first, then each
+specialist in order (each sees the earlier turns), then the orchestrator synthesis; every turn is
+persisted as it is produced, so a dropped connection loses nothing.
+
 ## Strategies & experiments
 
 | Method | Path | Notes |

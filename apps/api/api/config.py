@@ -183,7 +183,13 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
         if self.app_env == "production":
-            if self.secret_key.get_secret_value() == "dev-insecure-secret-change-me-32-chars-minimum":
+            # Both the code default and the placeholder shipped in .env.example are public
+            # knowledge, so either one is as bad as no secret at all.
+            insecure_secrets = {
+                "dev-insecure-secret-change-me-32-chars-minimum",
+                "change-me-at-least-32-characters-long",
+            }
+            if self.secret_key.get_secret_value().strip() in insecure_secrets:
                 raise ValueError(
                     "refusing to boot in production with the default JWT secret; "
                     "set SECRET_KEY to a unique 32+ character value"

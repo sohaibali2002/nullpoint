@@ -23,6 +23,7 @@ import {
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { GenerativeBlocks } from "@/components/generative";
 import { Badge, Button, Notice, Panel, PageHeader } from "@/components/ui";
 import { api, getToken, streamChat, uploadChatFile, useApi } from "@/lib/api";
 import { when } from "@/lib/format";
@@ -128,6 +129,8 @@ export default function ChatPage() {
   const [projectBusy, setProjectBusy] = useState(false);
   const [project, setProject] = useState<{ id: string; objective: string } | null>(null);
   const [threadQuery, setThreadQuery] = useState("");
+  // Live token stream: whoever is speaking right now, before the turn is persisted.
+  const [live, setLive] = useState<{ agent: string; agent_name: string; text: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoBootstrapped = useRef(false);
@@ -181,7 +184,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [detail?.messages.length, sending]);
+  }, [detail?.messages.length, sending, live?.text]);
 
   const openCreated = async (created: ChatThreadDetail) => {
     setDetail(created);
@@ -406,17 +409,27 @@ export default function ChatPage() {
     setDraft("");
     setError(null);
     setSending(true);
+    setLive(null);
     setDetail((current) => (current ? { ...current, messages: [...current.messages, optimistic] } : current));
     try {
       await streamChat(
         `/chats/${detail.thread.id}/messages/stream`,
         { content, use_web: useWeb, deep: useDeep },
         (event, data) => {
-          if (event === "message" && data?.id) {
+          if (event === "delta" && data?.text) {
+            setLive((current) => {
+              if (!current || current.agent !== data.agent) {
+                return { agent: data.agent, agent_name: data.agent_name ?? data.agent, text: String(data.text) };
+              }
+              return { ...current, text: current.text + String(data.text) };
+            });
+          } else if (event === "message" && data?.id) {
             setDetail((current) => {
               if (!current || current.messages.some((message) => message.id === data.id)) return current;
               return { ...current, messages: [...current.messages, data as ChatTurn] };
             });
+            // The persisted turn replaces the live bubble for whoever just finished.
+            setLive((current) => (current && current.agent === data.agent ? null : current));
           } else if (event === "error") {
             setError(data?.detail ?? "The agent could not reply");
           }
@@ -429,6 +442,7 @@ export default function ChatPage() {
       await refreshDetail(detail.thread.id);
     } finally {
       setSending(false);
+      setLive(null);
     }
   };
 
@@ -854,6 +868,7 @@ export default function ChatPage() {
                                 {message.content}
                               </div>
                             )}
+                            <GenerativeBlocks blocks={message.ui} />
                             {!attachment && <Sources sources={message.sources ?? []} />}
                             {!mine && (message.model || message.tokens_out) && !evidence && (
                               <div className="mt-1 flex items-center gap-2 font-mono text-[9px] text-muted/45">
@@ -876,7 +891,24 @@ export default function ChatPage() {
                         </div>
                       );
                     })}
-                    {sending && (
+                    {sending && live?.text && (
+                      <div className="flex gap-2.5">
+                        <Avatar assistant room={isRoom} />
+                        <div className="max-w-[88%]">
+                          <div className="mb-1 flex items-center gap-1.5">
+                            <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-signal/80">
+                              {live.agent_name}
+                            </p>
+                            <Badge tone="signal">streaming</Badge>
+                          </div>
+                          <div className="whitespace-pre-wrap rounded-xl border border-signal/20 bg-signal/5 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-text">
+                            {live.text}
+                            <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-signal align-middle" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {sending && !live?.text && (
                       <div className="flex gap-2.5">
                         <Avatar assistant room={isRoom} />
                         <div className="flex items-center gap-2 rounded-xl border border-line/80 bg-ink/50 px-3.5 py-2.5 text-[12px] text-muted">

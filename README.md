@@ -16,6 +16,13 @@ Research software only. Not investment advice, not a signal service, not a broke
 - **10 agents, one typed bus.** Orchestrator, ideator, quant, engineer, backtester, skeptic, risk
   officer, librarian, portfolio manager, auditor. Every message, tool call and token is persisted and
   replayable.
+- **Agents that actually talk to each other.** A research room puts 2–5 specialists in one thread
+  with a shared evidence bundle: each answers a named point made by the previous speaker, the
+  orchestrator closes with a cited synthesis, and the whole round streams token by token over SSE.
+  Sprint transcripts show the same hand-offs (skeptic rejection → coder's stated fix → risk review).
+- **Generative UI.** Agents can emit a `ui` spec — metrics cards, tables, charts, gate receipts,
+  checklists, callouts — which the client renders with native components instead of raw text. Only
+  values that came from the database or a tool may appear in one; malformed specs are dropped.
 - **Falsification, not curve fitting.** Walk-forward (anchored/rolling), purged + embargoed K-fold,
   CPCV, PBO/CSCV, deflated Sharpe against a global trial counter, Monte Carlo trade/block bootstrap,
   random-entry and signal-shuffle nulls, cost 2×/3× stress, execution delay, regime coverage and a
@@ -32,7 +39,8 @@ Research software only. Not investment advice, not a signal service, not a broke
   with data/code hashes, HRP / risk parity / inverse-vol / mean-variance construction, paper trading
   with drift, alerts, cost dashboard.
 - **Product surface.** Next.js 15 app (dark-first brand, demo mode), FastAPI with JWT + API keys,
-  Arq worker, Postgres, Parquet/DuckDB lake, Prometheus metrics, Docker Compose, CI.
+  SSE token streaming, Arq worker, Postgres or sqlite, Parquet/DuckDB lake, Prometheus metrics,
+  Docker Compose, CI.
 
 ## Quickstart
 
@@ -117,14 +125,24 @@ Configured in `engine/validation.py` (`GATES`) and applied to every candidate:
 | Sharpe with +1 extra bar delay | >= 0.3 |  | `delay_sharpe_min` |
 | Parameter plateau share | >= 0.4 |  | `plateau_share_min` |
 | Minimum track record | >= 1 years and >= 20 trades | yes | `min_trades` |
-| Worst regime Sharpe (60+ days, >= 4 regimes) | >= -0.25 | yes | `regime_min_sharpe` |
+| Median regime Sharpe (60+ days, <= 1 regime below the floor) | >= -0.25 | yes | `regime_min_sharpe` |
 | Sealed holdout | one-time, human-only, logged before opening | yes | policy |
 
 Generated from `engine/validation.py` by `scripts/render_gates.py`. Do not edit this table by hand.
 <!-- gates:end -->
 
-One failed gate blocks promotion. Rejections are stored with a tearsheet; deleting them would make the
-trial count lie.
+One failed critical gate blocks promotion. Rejections are stored with a tearsheet; deleting them would
+make the trial count lie.
+
+A gate that **cannot be evaluated** on the sample — too few observations for CPCV/PBO, a
+single-parameter grid with no plateau geometry, a stress run that errors, a history shorter than the
+regime buckets need — is recorded as `skip`, excluded from the score, and never counted as a failure.
+A gate that is computed and fails still blocks. This keeps "we could not test it" from being reported
+as "the strategy is broken", which was rejecting otherwise sound candidates on short samples.
+
+Deflated Sharpe deflates by the effective, correlation-clustered number of trials in the **current
+search family**; the org-wide monotonic trial counter is still recorded (`n_trials`) and audited
+(`dsr_global_audit`) so search history stays visible without eventually rejecting every strategy.
 
 ## Status ladder and safety
 

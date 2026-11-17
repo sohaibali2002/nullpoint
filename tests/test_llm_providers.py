@@ -174,7 +174,13 @@ def test_named_provider_default_base_url_and_mock(monkeypatch):
     mocked = llm_module.build_llm("anything", "mock", None)
     response = mocked.complete(system="s", messages=[{"role": "user", "content": "u"}])
     assert response.cost_usd == 0.0
-    assert "Offline reasoning" in response.text
+    # The offline client stays role-aware: it answers in the requested agent's voice and
+    # always ends with a concrete next check.
+    assert "Next check:" in response.text
+    streamed = "".join(
+        mocked.stream(system="s", messages=[{"role": "user", "content": "u"}])
+    )
+    assert streamed.strip() == response.text.strip()
 
 
 def test_unknown_provider_fails_loudly():

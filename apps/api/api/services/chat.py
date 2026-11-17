@@ -8,7 +8,9 @@ Nothing in either mode can execute a backtest or route an order.
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -21,7 +23,7 @@ from agents.llm import LLMClient, LLMResponse, build_llm, cost_for
 from agents.roster import AGENT_SPECS
 from agents.search import SearchRouter
 from api.config import Settings
-from api.models import ChatMessage, ChatThread, LLMUsage, Memory, new_id
+from api.models import ChatMessage, ChatThread, LLMUsage, Memory, Strategy, new_id
 
 CHAT_PREAMBLE = (
     "You are in a direct, multi-turn conversation with the operator. Be conversational and concise, "
@@ -49,6 +51,24 @@ ROOM_SYNTHESIS = (
     "advice. End with the single most useful falsification test."
 )
 
+# Generative UI: an agent may append one fenced `ui` block holding a JSON spec that the client
+# renders with native components.  Only values the agent actually saw may appear in it.
+UI_BLOCK_TYPES: frozenset[str] = frozenset(
+    {"brief", "evidence", "attachment", "metrics", "table", "chart", "checklist", "gates", "callout"}
+)
+MAX_UI_BLOCKS = 4
+UI_INSTRUCTION = (
+    "You may append at most one fenced ```ui block containing a JSON object (or array of objects) "
+    "the operator's client renders natively. Allowed shapes: "
+    '{"type":"metrics","title":str,"items":[{"label":str,"value":str,"hint":str}]}, '
+    '{"type":"table","title":str,"columns":[str],"rows":[[str]]}, '
+    '{"type":"checklist","title":str,"items":[{"label":str,"detail":str}]}, '
+    '{"type":"chart","title":str,"series":[{"label":str,"points":[[x,y]]}]}, '
+    '{"type":"callout","tone":"info|warn|danger","title":str,"body":str}. '
+    "Only render numbers that appear in the context you were given; never invent a value. "
+    "Omit the block entirely if you have nothing concrete to show."
+)
+
 MAX_HISTORY_MESSAGES = 36
 MAX_HISTORY_CHARS = 18_000
 MAX_KNOWLEDGE_HITS = 5
@@ -70,6 +90,9 @@ TRIVIAL_QUERIES = {
     "good morning",
     "good evening",
 }
+# (agent_key, agent_display_name, text_chunk) — how token deltas reach the SSE writer.
+DeltaSink = Callable[[str, str, str], None]
+
 MIN_ROOM_PARTICIPANTS = 2
 DEFAULT_ROOM_PARTICIPANTS = ("ideator", "data_engineer", "skeptic", "risk_analyst")
 DEEP_WEB_SOURCES = 8
@@ -112,8 +135,53 @@ def thread_dict(
     }
 
 
+# Capture the whole fence body: UI specs nest objects (metrics items, chart series), so a
+# brace-to-brace match would truncate them at the first inner closing brace.
+UI_FENCE = re.compile(r"```ui\s*(.*?)```", re.S)
+
+
+def parse_ui_specs(content: str) -> list[dict[str, Any]]:
+    """Extract model-authored UI specs from a message.
+
+    Malformed or unknown specs are dropped rather than shown as raw JSON: a bad block must
+    never break the transcript.
+    """
+    blocks: list[dict[str, Any]] = []
+    for match in UI_FENCE.finditer(content or ""):
+        raw = match.group(1).strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            # Tolerate prose or a stray fence around otherwise valid JSON.
+            start = min(
+                (index for index in (raw.find("{"), raw.find("[")) if index >= 0),
+                default=-1,
+            )
+            if start < 0:
+                continue
+            try:
+                parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+            except json.JSONDecodeError:
+                continue
+        candidates = parsed if isinstance(parsed, list) else [parsed]
+        for candidate in candidates:
+            if isinstance(candidate, dict) and str(candidate.get("type")) in UI_BLOCK_TYPES:
+                blocks.append(candidate)
+            if len(blocks) >= MAX_UI_BLOCKS:
+                return blocks
+    return blocks
+
+
+def strip_ui_specs(content: str) -> str:
+    """Remove the rendered UI payload from the prose the operator reads."""
+    return UI_FENCE.sub("", content or "").strip()
+
+
 def _ui_blocks(message: ChatMessage) -> list[dict[str, Any]]:
     kind = getattr(message, "kind", None) or "message"
+    generated = parse_ui_specs(message.content or "")
+    if generated:
+        return generated
     if kind == "synthesis":
         sections: list[dict[str, str]] = []
         heading = ""
@@ -153,7 +221,7 @@ def message_dict(message: ChatMessage) -> dict[str, Any]:
         "id": message.id,
         "thread_id": message.thread_id,
         "role": message.role,
-        "content": message.content,
+        "content": strip_ui_specs(message.content),
         "agent": message.agent,
         "agent_name": agent_name(message.agent),
         "kind": getattr(message, "kind", None) or "message",
@@ -170,6 +238,16 @@ def message_dict(message: ChatMessage) -> dict[str, Any]:
 def _snippet(text: str, limit: int = 180) -> str:
     compact = " ".join(str(text or "").split())
     return compact[:limit] + ("…" if len(compact) > limit else "")
+
+
+def _num(value: Any, digits: int = 2) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if number != number:  # NaN
+        return "n/a"
+    return f"{number:.{digits}f}"
 
 
 def _model_for(agent: str, settings: Settings) -> str:
@@ -327,6 +405,36 @@ def _web_sources(query: str, settings: Settings, *, limit: int = MAX_WEB_SOURCES
         return []
 
 
+def _results_context(db: Session, org_id: str, limit: int = 3) -> list[dict[str, Any]]:
+    """Real stored numbers the room is allowed to quote.  Never fabricated."""
+    rows = (
+        db.execute(
+            select(Strategy)
+            .where(Strategy.org_id == org_id)
+            .order_by(Strategy.created_at.desc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = row.metrics or {}
+        if not metrics:
+            continue
+        results.append(
+            {
+                "name": row.name,
+                "status": row.status,
+                "sharpe": metrics.get("sharpe"),
+                "cagr": metrics.get("cagr"),
+                "max_drawdown": metrics.get("max_drawdown"),
+                "trades": metrics.get("n_trades"),
+            }
+        )
+    return results
+
+
 def _context_block(
     db: Session,
     org_id: str,
@@ -338,6 +446,17 @@ def _context_block(
     knowledge = _knowledge_context(db, org_id, query, settings)
     memories = _memory_context(db, org_id, query)
     sections: list[str] = []
+    results = _results_context(db, org_id)
+    if results:
+        lines = [
+            f"- {row['name']} [{row['status']}]: Sharpe {_num(row['sharpe'])}, "
+            f"CAGR {_num(row['cagr'])}, Max drawdown {_num(row['max_drawdown'])}, "
+            f"{_num(row['trades'], digits=0)} trades"
+            for row in results
+        ]
+        sections.append(
+            "Recent stored backtests (measured, not forecasts):\n" + "\n".join(lines)
+        )
     if sources:
         lines = [
             f"- [{hit.get('id', 'S?')}] {hit.get('title', 'untitled')} "
@@ -513,6 +632,8 @@ def _agent_turn(
     task: str = "",
     deep: bool = False,
     model: str | None = None,
+    on_delta: Callable[[str], None] | None = None,
+    allow_ui: bool = True,
 ) -> ChatMessage:
     spec = AGENT_SPECS.get(agent) or AGENT_SPECS["orchestrator"]
     selected_model = model or model_for_task(agent, task or instruction, settings, deep=deep)
@@ -523,19 +644,53 @@ def _agent_turn(
             "\n\nDeep research mode: surface the strongest counter-case, distinguish consensus "
             "from evidence, and name the one measurement that would make you abandon the idea."
         )
+    if allow_ui:
+        system += "\n\n" + UI_INSTRUCTION
     if getattr(thread, "summary", ""):
         system += "\n\nEarlier conversation summary:\n" + thread.summary
     if context:
         system += "\n\nRetrieved desk context:\n" + context
     history = _history(db, thread.id)
-    response: LLMResponse = client.complete(
-        system=system,
-        messages=_llm_messages(history, room=(thread.mode in {"room", "auto"})),
-        max_tokens=max_tokens,
-        temperature=0.2 if agent == "skeptic" else 0.3,
-    )
-    text = response.text.strip() or "I could not produce a useful contribution. Try rephrasing the question."
-    cost = response.cost_usd or cost_for(response.model, response.tokens_in, response.tokens_out)
+    llm_messages = _llm_messages(history, room=(thread.mode in {"room", "auto"}))
+    temperature = 0.2 if agent == "skeptic" else 0.3
+
+    # Stream when the caller can consume deltas; otherwise take the blocking path.  A
+    # streaming failure falls back to complete() so a provider hiccup cannot lose the turn.
+    text = ""
+    response: LLMResponse | None = None
+    if on_delta is not None:
+        try:
+            for chunk in client.stream(
+                system=system,
+                messages=llm_messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                if not chunk:
+                    continue
+                text += chunk
+                on_delta(chunk)
+        except Exception:
+            text = ""
+    if not text:
+        response = client.complete(
+            system=system,
+            messages=llm_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        text = response.text
+    text = text.strip() or "I could not produce a useful contribution. Try rephrasing the question."
+    if response is not None:
+        model_name = response.model or selected_model
+        tokens_in = response.tokens_in
+        tokens_out = response.tokens_out
+        cost = response.cost_usd or cost_for(model_name, tokens_in, tokens_out)
+    else:
+        model_name = selected_model
+        tokens_in = max(1, len(system + str(llm_messages)) // 4)
+        tokens_out = max(1, len(text) // 4)
+        cost = cost_for(model_name, tokens_in, tokens_out)
     message = _save_message(
         db,
         thread,
@@ -543,9 +698,9 @@ def _agent_turn(
         agent=agent,
         content=text,
         kind=kind,
-        model=response.model or selected_model,
-        tokens_in=response.tokens_in,
-        tokens_out=response.tokens_out,
+        model=model_name,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
         cost_usd=cost,
         sources=sources or [],
     )
@@ -560,6 +715,15 @@ def _agent_turn(
     )
     db.commit()
     return message
+
+
+def _delta_callback(
+    agent: str, on_delta: Callable[[str, str, str], None] | None
+) -> Callable[[str], None] | None:
+    if on_delta is None:
+        return None
+    name = agent_name(agent)
+    return lambda chunk: on_delta(agent, name, chunk)
 
 
 def _auto_participants(query: str) -> list[str]:
@@ -618,6 +782,7 @@ def generate_reply(
     settings: Settings,
     use_web: bool = True,
     deep: bool = False,
+    on_delta: Callable[[str, str, str], None] | None = None,
 ) -> ChatMessage:
     _maybe_compact(db, thread, settings)
     history = _history(db, thread.id)
@@ -642,6 +807,7 @@ def generate_reply(
         max_tokens=1200 if deep else 900,
         task=latest,
         deep=deep,
+        on_delta=_delta_callback(thread.agent, on_delta),
     )
 
 
@@ -652,6 +818,7 @@ def generate_room_round(
     settings: Settings,
     use_web: bool = True,
     deep: bool = False,
+    on_delta: Callable[[str, str, str], None] | None = None,
 ) -> None:
     """Run one visible room round and persist every turn as it is produced."""
     participants = [
@@ -758,6 +925,7 @@ def generate_room_round(
             max_tokens=700 if deep else 450,
             task=latest_user.content,
             deep=deep,
+            on_delta=_delta_callback(agent, on_delta),
         )
 
     synthesis = _agent_turn(
@@ -772,6 +940,7 @@ def generate_room_round(
         max_tokens=950 if deep else 650,
         task=latest_user.content,
         deep=deep,
+        on_delta=_delta_callback("orchestrator", on_delta),
     )
     if thread.mode in {"room", "auto"}:
         _remember_room(db, thread, synthesis)

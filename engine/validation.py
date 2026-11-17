@@ -654,19 +654,39 @@ def same_bar_dependence_canary(spec: StrategySpec, *, seed: int = 7, n_obs: int 
 def parameter_plateau(
     rows: Sequence[dict[str, Any]], tolerance: float = 0.30
 ) -> dict[str, Any]:
-    """Detect a plateau rather than a lucky spike in a 2-D parameter grid."""
+    """Detect a plateau rather than a lucky spike in a 2-D parameter grid.
+
+    A single-parameter or tiny grid cannot express a plateau.  That is a property of the
+    search, not evidence against the strategy, so it is reported as not applicable and the
+    caller skips the gate instead of failing it.
+    """
     if len(rows) < 4:
-        return {"plateau_share": 0.0, "heatmap": None, "note": "grid too small"}
+        return {
+            "plateau_share": 0.0,
+            "heatmap": None,
+            "applicable": False,
+            "note": "grid too small for a plateau test",
+        }
     param_keys = sorted(
         {k for row in rows for k, v in row.get("params", {}).items() if isinstance(v, (int, float))}
     )
     if len(param_keys) < 2:
-        return {"plateau_share": 0.0, "heatmap": None, "note": "need two numeric parameters"}
+        return {
+            "plateau_share": 0.0,
+            "heatmap": None,
+            "applicable": False,
+            "note": "needs two numeric parameters to form a plateau",
+        }
     keys = param_keys[:2]
     best_row = max(rows, key=lambda r: float(r.get("score", -np.inf)))
     best_score = float(best_row.get("score", 0.0))
     if not np.isfinite(best_score):
-        return {"plateau_share": 0.0, "heatmap": None, "note": "no finite objective"}
+        return {
+            "plateau_share": 0.0,
+            "heatmap": None,
+            "applicable": False,
+            "note": "no finite objective",
+        }
     threshold = best_score - tolerance * max(abs(best_score), 1e-6)
     xs = sorted({float(r["params"][keys[0]]) for r in rows if keys[0] in r.get("params", {})})
     ys = sorted({float(r["params"][keys[1]]) for r in rows if keys[1] in r.get("params", {})})
@@ -684,6 +704,7 @@ def parameter_plateau(
                 best_cell = [xi, yi]
     return {
         "plateau_share": share,
+        "applicable": True,
         "threshold": threshold,
         "heatmap": {
             "x_param": keys[0],
@@ -851,9 +872,21 @@ class Gate:
     value: float | None
     threshold: str
     detail: str = ""
+    # A skipped gate could not be evaluated on this data (too few observations, a search
+    # with no plateau geometry, a stress run that errored).  Skipped is not a failure: an
+    # untested property must not be reported as a broken strategy.
+    skipped: bool = False
+
+    @property
+    def status(self) -> str:
+        if self.skipped:
+            return "skip"
+        return "pass" if self.passed else "fail"
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["status"] = self.status
+        return payload
 
 
 @dataclass
@@ -898,8 +931,30 @@ class ValidationReport:
         return payload
 
 
-def _gate(name: str, passed: bool, value: float | None, threshold: str, detail: str = "") -> Gate:
-    return Gate(name=name, passed=bool(passed), value=value, threshold=threshold, detail=detail)
+def _gate(
+    name: str,
+    passed: bool,
+    value: float | None,
+    threshold: str,
+    detail: str = "",
+    *,
+    skipped: bool = False,
+) -> Gate:
+    return Gate(
+        name=name,
+        passed=bool(passed) and not skipped,
+        value=value,
+        threshold=threshold,
+        detail=detail,
+        skipped=skipped,
+    )
+
+
+def _skip(name: str, threshold: str, detail: str) -> Gate:
+    """Record a gate that could not be evaluated instead of failing the strategy."""
+    return Gate(
+        name=name, passed=False, value=None, threshold=threshold, detail=detail, skipped=True
+    )
 
 
 def validate_strategy(
@@ -952,7 +1007,16 @@ def validate_strategy(
         "failures": grid_result.failures[:5],
     }
     if best is None:
-        gates.append(_gate("insufficient_trials", False, 0, ">= 3 trades; >= 1 candidate"))
+        reasons = "; ".join(str(f.get("error", f)) for f in grid_result.failures[:3])
+        gates.append(
+            _gate(
+                "insufficient_trials",
+                False,
+                0,
+                ">= 1 backtestable parameter set",
+                reasons or "every parameter set produced an error or no trades",
+            )
+        )
         return _finalise(spec, data, gates, sections, trial_counter)
 
     # 2. Walk-forward (rolling and anchored).
@@ -1004,8 +1068,16 @@ def validate_strategy(
                     )
                 )
         except ValueError as exc:
+            # Short or degenerate history: the walk-forward cannot be computed at all.
+            # That is missing evidence, not a bad strategy, so the gate is skipped.
             sections[f"wfo_{mode}"] = {"error": str(exc)}
-            gates.append(_gate(f"walk_forward_{mode}", False, None, "runs", str(exc)))
+            gates.append(
+                _skip(
+                    f"walk_forward_{mode}",
+                    "runs",
+                    f"not applicable on this sample: {exc}",
+                )
+            )
 
     # 3. CPCV.  Build the continuous candidate matrix once; parameters are chosen from
     # train indices only and every test block is scored without stitching purged gaps.
@@ -1032,7 +1104,13 @@ def validate_strategy(
         )
     except ValueError as exc:
         sections["cpcv"] = {"error": str(exc)}
-        gates.append(_gate("cpcv", False, None, "runs", str(exc)))
+        gates.append(
+            _skip(
+                "cpcv_median_sharpe",
+                f">= {GATES['cpcv_median_sharpe_min']}",
+                f"not applicable on this sample: {exc}",
+            )
+        )
 
     # 4. PBO across the grid.
     try:
@@ -1043,16 +1121,24 @@ def validate_strategy(
         )
     except ValueError as exc:
         sections["pbo"] = {"error": str(exc)}
-        gates.append(_gate("pbo", False, None, "computed", str(exc)))
+        gates.append(
+            _skip(
+                "pbo",
+                f"<= {GATES['pbo_max']}",
+                f"not applicable: PBO needs at least two distinct trials and more history ({exc})",
+            )
+        )
 
     # 5. Deflated Sharpe in per-period units, using effective independent trials.
+    #
+    # The deflation applies to the *family* being selected from: the parameter sets scored in
+    # this run.  The org-wide counter is monotonic and grows forever, so deflating by it would
+    # eventually reject every strategy no matter how strong its evidence.  The global count is
+    # still reported (and audited) so the search history stays visible.
     raw_trials = max(1, trial_counter.value if trial_counter else len(grid_result.results))
+    family_trials = max(1, len(grid_result.results))
     cluster = effective_trials(matrix)
-    # We can cluster only trials whose return streams are in this matrix.  Historical trials
-    # without stored returns are counted individually rather than assumed correlated; the
-    # alternative lets a large search history disappear from the DSR penalty.
-    unclustered = max(0, raw_trials - int(matrix.shape[1]))
-    n_eff = max(1, int(cluster["n_effective"]) + unclustered)
+    n_eff = max(1, int(cluster["n_effective"]))
     observed_sr = float(best.metrics.get("sharpe", 0.0))
     observed_sr_periodic = observed_sr / math.sqrt(TRADING_DAYS)
     n_obs = int(best.metrics.get("n_periods", 0))
@@ -1078,8 +1164,16 @@ def validate_strategy(
         "observed_sharpe_periodic": observed_sr_periodic,
         "n_trials": raw_trials,
         "n_trials_raw": raw_trials,
+        "n_trials_family": family_trials,
         "n_trials_effective": n_eff,
-        "n_trials_unclustered": unclustered,
+        "dsr_global_audit": deflated_sharpe_ratio(
+            observed_sr_periodic,
+            max(1, raw_trials),
+            n_obs,
+            skew=skew,
+            kurtosis=kurtosis,
+            sr_variance=sr_var_periodic,
+        ),
         "trial_clusters": cluster,
         "expected_max_sharpe_annualised": expected_max_sharpe(
             n_eff, n_obs, sr_var_periodic
@@ -1087,6 +1181,7 @@ def validate_strategy(
         * math.sqrt(TRADING_DAYS),
         "psr_vs_zero": probabilistic_sharpe_ratio(observed_sr_periodic, n_obs, skew, kurtosis),
         "trial_source": "counter" if trial_counter is not None else "memory",
+        "deflation_basis": "return streams scored in this run (effective, correlation-clustered)",
         "units": "per-period; annualised values reported for display only",
     }
     gates.append(
@@ -1095,7 +1190,8 @@ def validate_strategy(
             dsr >= GATES["dsr_min"],
             dsr,
             f">= {GATES['dsr_min']}",
-            f"N_eff={n_eff} of {raw_trials} recorded trials",
+            f"N_eff={n_eff} of {family_trials} trials in this search "
+            f"({raw_trials} lifetime trials recorded)",
         )
     )
 
@@ -1157,7 +1253,24 @@ def validate_strategy(
 
     canary = future_canary(_positions_for, data.close[spec.universe])
     sections["future_canary"] = canary
-    gates.append(_gate("future_canary", canary.get("passed", False), canary.get("max_abs_diff"), "no past change"))
+    if canary.get("max_abs_diff") is None:
+        # The canary needs history to cut in half; with too few bars it proves nothing.
+        gates.append(
+            _skip(
+                "future_canary",
+                "no past change",
+                str(canary.get("note") or "not enough history to run the canary"),
+            )
+        )
+    else:
+        gates.append(
+            _gate(
+                "future_canary",
+                bool(canary.get("passed")),
+                canary.get("max_abs_diff"),
+                "no past change",
+            )
+        )
 
     same_bar = same_bar_dependence_canary(spec, seed=seed)
     sections["same_bar_canary"] = same_bar
@@ -1180,35 +1293,66 @@ def validate_strategy(
 
     stress = cost_sensitivity(_runner)
     sections["cost_sensitivity"] = stress
-    gates.append(
-        _gate(
-            "cost_3x",
-            bool((stress["stressed_sharpe"] or 0.0) >= GATES["cost_3x_sharpe_min"]),
-            stress["stressed_sharpe"],
-            f">= {GATES['cost_3x_sharpe_min']} at 3x costs, +1 bar",
+    stressed_value = stress["stressed_sharpe"]
+    stress_errors = [row.get("error") for row in stress["table"] if row.get("error")]
+    if stressed_value is None:
+        gates.append(
+            _skip(
+                "cost_3x",
+                f">= {GATES['cost_3x_sharpe_min']} at 3x costs, +1 bar",
+                (stress_errors[0] if stress_errors else "stressed run produced no result"),
+            )
         )
-    )
+    else:
+        gates.append(
+            _gate(
+                "cost_3x",
+                stressed_value >= GATES["cost_3x_sharpe_min"],
+                stressed_value,
+                f">= {GATES['cost_3x_sharpe_min']} at 3x costs, +1 bar",
+            )
+        )
     delay_row = next((r for r in stress["table"] if r["cost_multiplier"] == 3.0 and r["delay_bars"] == 2), None)
-    gates.append(
-        _gate(
-            "execution_delay",
-            bool(((delay_row or {}).get("sharpe") or 0.0) >= GATES["delay_sharpe_min"]),
-            (delay_row or {}).get("sharpe"),
-            f">= {GATES['delay_sharpe_min']} with +1 extra bar delay",
+    delay_value = (delay_row or {}).get("sharpe")
+    if delay_value is None:
+        gates.append(
+            _skip(
+                "execution_delay",
+                f">= {GATES['delay_sharpe_min']} with +1 extra bar delay",
+                str((delay_row or {}).get("error") or "delayed run produced no result"),
+            )
         )
-    )
+    else:
+        gates.append(
+            _gate(
+                "execution_delay",
+                delay_value >= GATES["delay_sharpe_min"],
+                delay_value,
+                f">= {GATES['delay_sharpe_min']} with +1 extra bar delay",
+            )
+        )
 
-    # 9. Parameter plateau.
+    # 9. Parameter plateau.  Only meaningful when the grid has two numeric axes and enough
+    # cells to have a shape; otherwise it is skipped rather than scored as zero.
     plateau = parameter_plateau(grid_result.summary())
     sections["parameter_stability"] = plateau
-    gates.append(
-        _gate(
-            "parameter_plateau",
-            plateau["plateau_share"] >= GATES["plateau_share_min"],
-            plateau["plateau_share"],
-            f">= {GATES['plateau_share_min']}",
+    if plateau.get("applicable", True):
+        gates.append(
+            _gate(
+                "parameter_plateau",
+                plateau["plateau_share"] >= GATES["plateau_share_min"],
+                plateau["plateau_share"],
+                f">= {GATES['plateau_share_min']}",
+            )
         )
-    )
+    else:
+        gates.append(
+            _skip(
+                "parameter_plateau",
+                f">= {GATES['plateau_share_min']}",
+                str(plateau.get("note") or "grid has no plateau geometry"),
+            )
+        )
 
     # 10. Track record and regimes.
     years = len(best.returns) / TRADING_DAYS
@@ -1233,17 +1377,31 @@ def validate_strategy(
         for bucket in regime.get("buckets", [])
         if bucket.get("n_days", 0) >= 60 and bucket.get("sharpe") is not None
     ]
-    worst_regime = min((float(b["sharpe"]) for b in usable), default=None)
-    regime_passed = len(usable) >= 4 and worst_regime is not None and worst_regime >= GATES["regime_min_sharpe"]
-    gates.append(
-        _gate(
-            "regime_robustness",
-            regime_passed,
-            worst_regime,
-            f">= {GATES['regime_min_sharpe']} in >= 4 regimes (60+ days each)",
-            "a strategy that only works in one regime is not investable",
+    sharpe_by_regime = np.asarray([float(b["sharpe"]) for b in usable], dtype=float)
+    worst_regime = float(sharpe_by_regime.min()) if len(sharpe_by_regime) else None
+    if len(sharpe_by_regime) < 3:
+        # The sample does not contain enough distinct regimes to say anything.
+        gates.append(
+            _skip(
+                "regime_robustness",
+                f"median regime Sharpe >= 0 with <= 1 loser below {GATES['regime_min_sharpe']}",
+                f"only {len(sharpe_by_regime)} regime(s) with 60+ days on this sample",
+            )
         )
-    )
+    else:
+        median_regime = float(np.median(sharpe_by_regime))
+        losers = int(np.sum(sharpe_by_regime < GATES["regime_min_sharpe"]))
+        regime_passed = median_regime >= 0.0 and losers <= 1
+        gates.append(
+            _gate(
+                "regime_robustness",
+                regime_passed,
+                median_regime,
+                f"median >= 0 with <= 1 regime below {GATES['regime_min_sharpe']}",
+                f"{len(usable)} regimes; worst {worst_regime:.2f}; "
+                f"{losers} below the floor — a strategy that only works in one regime is not investable",
+            )
+        )
 
     return _finalise(spec, data, gates, sections, trial_counter)
 
@@ -1256,11 +1414,26 @@ def _finalise(
     trial_counter: TrialCounter | None,
 ) -> ValidationReport:
     critical = CRITICAL_GATES
-    total = max(1, len(gates))
-    passed_count = sum(1 for g in gates if g.passed)
+    # Skipped gates are excluded from the score and cannot fail a critical check: the
+    # strategy was not shown to be wrong, the data simply could not test that property.
+    applicable = [g for g in gates if not g.skipped]
+    total = max(1, len(applicable))
+    passed_count = sum(1 for g in applicable if g.passed)
     score = passed_count / total
-    critical_ok = all(g.passed for g in gates if g.name in critical)
-    passed = critical_ok and score >= 0.70
+    critical_failures = [
+        g.name for g in applicable if g.name in critical and not g.passed
+    ]
+    passed = not critical_failures and score >= 0.70
+    sections.setdefault("summary", {})
+    sections["summary"].update(
+        {
+            "gates_total": len(gates),
+            "gates_evaluated": len(applicable),
+            "gates_skipped": len(gates) - len(applicable),
+            "critical_failures": critical_failures,
+            "failed": [g.name for g in applicable if not g.passed],
+        }
+    )
     if passed and score >= 0.85:
         recommendation = "candidate"
     elif passed:

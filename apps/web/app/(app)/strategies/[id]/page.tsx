@@ -275,10 +275,16 @@ export default function StrategyDetailPage() {
                       <tr key={gate.name}>
                         <td className="table-cell mono text-xs text-text">{gate.name.replaceAll("_", " ")}</td>
                         <td className="table-cell">
-                          <span className={`inline-flex items-center gap-1 font-mono text-[10px] ${gate.passed ? "text-signal" : "text-danger"}`}>
-                            {gate.passed ? <Check size={11} /> : <X size={11} />}
-                            {gate.passed ? "pass" : "fail"}
-                          </span>
+                          {gate.skipped || gate.status === "skip" ? (
+                            <span className="inline-flex items-center gap-1 font-mono text-[10px] text-warn">
+                              — skipped
+                            </span>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 font-mono text-[10px] ${gate.passed ? "text-signal" : "text-danger"}`}>
+                              {gate.passed ? <Check size={11} /> : <X size={11} />}
+                              {gate.passed ? "pass" : "fail"}
+                            </span>
+                          )}
                         </td>
                         <td className="table-cell mono text-right text-xs">
                           {typeof gate.value === "number" ? num(gate.value, 3) : "—"}
@@ -297,7 +303,9 @@ export default function StrategyDetailPage() {
             )}
           </Panel>
           <Notice tone="warn">
-            Gates are hard constraints, not a score. One failed gate blocks promotion regardless of Sharpe.
+            Gates are hard constraints, not a score. One failed critical gate blocks promotion regardless of
+            Sharpe. A skipped gate could not be evaluated on this sample (too few observations or a search with no
+            plateau geometry); it is not counted as a failure.
           </Notice>
         </div>
       )}

@@ -52,9 +52,40 @@ export interface Message {
   created_at: string;
 }
 
+export interface ChatBlockItem {
+  label: string;
+  value?: string;
+  hint?: string;
+  detail?: string;
+  status?: string;
+}
+
+export interface ChatSeries {
+  label?: string;
+  points: Array<[string | number, number]>;
+}
+
+/** A UI spec authored by an agent and rendered with native components. */
 export interface ChatBlock {
-  type: "brief" | "evidence" | "attachment" | string;
+  type:
+    | "brief"
+    | "evidence"
+    | "attachment"
+    | "metrics"
+    | "table"
+    | "chart"
+    | "checklist"
+    | "gates"
+    | "callout"
+    | string;
+  title?: string;
   sections?: Array<{ heading: string; body: string }>;
+  items?: ChatBlockItem[];
+  columns?: string[];
+  rows?: string[][];
+  series?: ChatSeries[];
+  tone?: string;
+  body?: string;
   count?: number;
   providers?: string[];
   filename?: string;
@@ -142,6 +173,9 @@ export interface Gate {
   value: number | null;
   threshold: string;
   detail: string;
+  /** True when the check could not be evaluated on this sample; not a failure. */
+  skipped?: boolean;
+  status?: "pass" | "fail" | "skip";
 }
 
 export interface Validation {

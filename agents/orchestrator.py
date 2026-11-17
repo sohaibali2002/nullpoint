@@ -369,9 +369,22 @@ class SprintRunner:
                         "skeptic",
                         f"Rejected attempt {attempt + 1}/{plan['max_iterations']} "
                         f"(score {report.score:.2f}). Iterating with tighter risk and harsher costs.",
+                        tool_payload={
+                            "failed": [g.name for g in report.gates if not g.passed and not g.skipped],
+                            "skipped": [g.name for g in report.gates if g.skipped],
+                        },
                     )
                     self._transition(strategy, StrategyStatus.REJECTED)
                     if attempt + 1 < int(plan["max_iterations"]):
+                        # The coder answers the skeptic by name with the change it will make, so
+                        # the transcript shows a hand-off rather than two unrelated monologues.
+                        failed_names = [g.name for g in report.gates if not g.passed and not g.skipped]
+                        bus.emit(
+                            "strategy_coder",
+                            f"Skeptic, taking {', '.join(failed_names[:3]) or 'those failures'}: "
+                            "I will tighten the entry rule, cut turnover in half and re-run the "
+                            "same pre-registered grid so the trial count stays honest.",
+                        )
                         continue
                     funnel.advance(idea_id, FunnelStage.FALSIFIED, reason="validation failed")
 
@@ -383,7 +396,18 @@ class SprintRunner:
                     )
                     strategy.metrics = {**strategy.metrics, "risk": risk}
                     self._transition(strategy, StrategyStatus.CANDIDATE)
-                    strategy.metrics["trial_index"] = ctx.trial_counter.value
+                    bus.emit(
+                        "risk_analyst",
+                        f"Measured {strategy.name}: max correlation with existing candidates "
+                        f"{float(risk.get('max_correlation', 0.0)):.2f}. Sizing stays inside the "
+                        "caps; there is still no live order path.",
+                    )
+                    # Rebinding the JSON column is what makes SQLAlchemy persist the change;
+                    # mutating the dict in place is silently dropped.
+                    strategy.metrics = {
+                        **strategy.metrics,
+                        "trial_index": ctx.trial_counter.value,
+                    }
                     self.session.commit()
 
                     tearsheet = reporter.report(
@@ -394,7 +418,7 @@ class SprintRunner:
                         dataset_meta,
                     )
                     tearsheets.append(tearsheet)
-                    strategy.metrics["tearsheet_path"] = tearsheet["path"]
+                    strategy.metrics = {**strategy.metrics, "tearsheet_path": tearsheet["path"]}
                     self.session.commit()
 
                     librarian.record(
@@ -439,7 +463,10 @@ class SprintRunner:
                             # A rejected strategy still gets a tearsheet: negative results are results.
                             rejected_sheet = reporter.report(strategy, spec, result, report, dataset_meta)
                             tearsheets.append(rejected_sheet)
-                            strategy.metrics["tearsheet_path"] = rejected_sheet["path"]
+                            strategy.metrics = {
+                                **strategy.metrics,
+                                "tearsheet_path": rejected_sheet["path"],
+                            }
                             rejected_entry["tearsheet"] = rejected_sheet["path"]
                             self.session.commit()
                     librarian.record(
