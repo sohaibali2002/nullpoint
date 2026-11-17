@@ -3,7 +3,7 @@
   "functions": {
     "server.py": {
       "maxDuration": 300,
-      "excludeFiles": "{tests/**,docs/**,apps/web/**,**/__pycache__/**,**/*.pyc,**/pandas/tests/**,**/numpy/tests/**,**/scipy/**/tests/**,**/pyarrow/tests/**,**/pyarrow/include/**,**/duckdb/**,**/duckdb-*.dist-info/**,**/_duckdb*}"
+      "excludeFiles": "{tests/**,docs/**,apps/web/**,**/__pycache__/**,**/*.pyc,**/pandas/tests/**,**/numpy/tests/**,**/scipy/**/tests/**,**/pyarrow/tests/**,**/pyarrow/include/**,**/duckdb/**,**/duckdb-*.dist-info/**,**/_duckdb*,**/mypy/**,**/mypyc/**,**/_mypyc*,**/pytest/**,**/_pytest/**,**/ruff/**,**/pandas-stubs/**,**/types-requests/**,**/uvloop/**,**/watchfiles/**,**/httptools/**,**/pyarrow/libarrow_flight.so*,**/pyarrow/libarrow_s3.so*,**/pyarrow/libarrow_substrait.so*}"
     }
   },
   "regions": ["iad1"]
