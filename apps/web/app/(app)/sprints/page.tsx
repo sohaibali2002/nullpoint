@@ -7,11 +7,11 @@ import { useState } from "react";
 import { Button, DataStamp, Notice, Panel, PageHeader, StatusBadge } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { usd, when } from "@/lib/format";
-import { mockSprints } from "@/lib/mock";
+
 import type { Sprint } from "@/lib/types";
 
 export default function SprintsPage() {
-  const { data: sprints, demo, loading, reload } = useApi<Sprint[]>("/sprints", mockSprints);
+  const { data: sprints, demo, loading, reload } = useApi<Sprint[]>("/sprints", []);
   const [objective, setObjective] = useState(
     "Find cross-sectional momentum strategies that survive 3× costs on sector ETFs",
   );
@@ -26,7 +26,7 @@ export default function SprintsPage() {
     setError(null);
     setMessage(null);
     if (!getToken()) {
-      setError("Demo mode: sign in to launch a real sprint. The API needs an org, a budget and a worker.");
+      setError("Not signed in: sign in to launch a real sprint. The API needs an org, a budget and a worker.");
       return;
     }
     setBusy(true);
@@ -54,7 +54,7 @@ export default function SprintsPage() {
 
   const kill = async (id: string) => {
     if (!getToken()) {
-      setError("Demo mode: killing a sprint requires a signed-in session.");
+      setError("Not signed in: killing a sprint requires a signed-in session.");
       return;
     }
     try {

@@ -90,7 +90,7 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
-exclude = ["apps/web", "scripts/demo_sprint.py"]
+exclude = ["apps/web"]
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]

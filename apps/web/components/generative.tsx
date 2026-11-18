@@ -11,6 +11,8 @@ import {
   YAxis,
 } from "recharts";
 
+import Link from "next/link";
+
 import { Badge } from "@/components/ui";
 import type { ChatBlock } from "@/lib/types";
 
@@ -217,6 +219,14 @@ function Callout({ block }: { block: ChatBlock }) {
         <Icon size={11} /> {block.title ?? "note"}
       </p>
       {block.body && <p className="mt-1 text-[11.5px] leading-relaxed text-muted">{block.body}</p>}
+      {block.link && (
+        <Link
+          href={block.link}
+          className="mt-2 inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-text underline decoration-line underline-offset-4 hover:text-signal"
+        >
+          open stored result →
+        </Link>
+      )}
     </div>
   );
 }

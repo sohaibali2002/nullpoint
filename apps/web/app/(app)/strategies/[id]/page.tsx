@@ -9,7 +9,7 @@ import { EquityChart } from "@/components/charts";
 import { Badge, Button, DataStamp, Notice, Panel, PageHeader, StatusBadge } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { formatMetric, metricLabel, num, pct, usd, when } from "@/lib/format";
-import { equitySeries, mockStrategies, mockValidation } from "@/lib/mock";
+import { EMPTY_STRATEGY } from "@/lib/empty";
 import type { Experiment, Strategy, Validation } from "@/lib/types";
 
 type StrategyDetail = Strategy & {
@@ -24,10 +24,17 @@ const TABS = ["overview", "validation", "code", "lineage"] as const;
 
 export default function StrategyDetailPage() {
   const params = useParams<{ id: string }>();
-  const id = params?.id ?? mockStrategies[0].id;
-  const fallback = useMemo(
-    () => ({ ...mockStrategies.find((s) => s.id === id) ?? mockStrategies[0], validation: mockValidation, experiments: [], lineage: [] }),
-    [id],
+  const id = params?.id ?? "";
+  const fallback = useMemo<StrategyDetail>(
+    () => ({
+      ...EMPTY_STRATEGY,
+      validation: null,
+      validations: [],
+      experiments: [],
+      lineage: [],
+      approvals: [],
+    }),
+    [],
   );
   const { data: strategy, demo, reload } = useApi<StrategyDetail>(`/strategies/${id}`, fallback);
   const latestExperiment = strategy.experiments?.[0];
@@ -51,7 +58,7 @@ export default function StrategyDetailPage() {
         return { date, equity: Number(value.toFixed(2)) };
       });
     }
-    return equitySeries(220, 13);
+    return [];
   }, [experiment]);
 
   const validation = strategy.validation ?? strategy.validations?.[0];
@@ -61,7 +68,7 @@ export default function StrategyDetailPage() {
     setError(null);
     setNotice(null);
     if (!getToken()) {
-      setError("Demo mode: approval needs a signed-in session and an approval record in Postgres.");
+      setError("Approval needs a signed-in session and an approval record in the database.");
       return;
     }
     setBusy(true);
@@ -83,7 +90,7 @@ export default function StrategyDetailPage() {
     setError(null);
     setNotice(null);
     if (!getToken()) {
-      setError("Demo mode: start paper trading after signing in and approving this strategy.");
+      setError("Start paper trading after signing in and approving this strategy.");
       return;
     }
     setBusy(true);
@@ -151,8 +158,7 @@ export default function StrategyDetailPage() {
       {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
       {demo && (
         <Notice tone="warn" className="mb-3">
-          Demo strategy. Values are illustrative; the validation gate names and thresholds match the
-          backend.
+          Sign in to load this strategy. Nothing is displayed until the API returns a stored record.
         </Notice>
       )}
 

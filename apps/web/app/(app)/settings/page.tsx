@@ -6,12 +6,12 @@ import { useState } from "react";
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { pct, usd } from "@/lib/format";
-import { mockSettings, mockUsage } from "@/lib/mock";
+import { EMPTY_SETTINGS, EMPTY_USAGE } from "@/lib/empty";
 import type { SettingsData, UsageData } from "@/lib/types";
 
 export default function SettingsPage() {
-  const { data: settings, demo, reload } = useApi<SettingsData>("/settings", mockSettings);
-  const { data: usage } = useApi<UsageData>("/usage", mockUsage);
+  const { data: settings, demo, reload } = useApi<SettingsData>("/settings", EMPTY_SETTINGS);
+  const { data: usage } = useApi<UsageData>("/usage", EMPTY_USAGE);
   const [budget, setBudget] = useState<number>(settings.runtime?.sprint_budget_usd ?? 2);
   const [status, setStatus] = useState<{ tone: "signal" | "danger"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -19,7 +19,7 @@ export default function SettingsPage() {
   const save = async () => {
     setStatus(null);
     if (!getToken()) {
-      setStatus({ tone: "danger", text: "Demo mode: sign in to persist settings." });
+      setStatus({ tone: "danger", text: "Not signed in: sign in to persist settings." });
       return;
     }
     setBusy(true);

@@ -1,7 +1,6 @@
 import {
   ArrowRight,
   Ban,
-  Check,
   CircleSlash,
   Fingerprint,
   GitBranch,
@@ -9,14 +8,11 @@ import {
   ShieldCheck,
   Sigma,
   TestTubeDiagonal,
-  X,
 } from "lucide-react";
 import Link from "next/link";
 
-import { EquityChart } from "@/components/charts";
 import { Logo } from "@/components/logo";
-import { Badge, cn } from "@/components/ui";
-import { equitySeries } from "@/lib/mock";
+import { Badge } from "@/components/ui";
 
 const GAUNTLET = [
   {
@@ -63,8 +59,6 @@ const AGENTS = [
   ["Portfolio", "HRP, risk parity, inverse vol"],
   ["Auditor", "Replayable trail and tearsheets"],
 ];
-
-const SAMPLE = equitySeries(160, 11, 0.0006, 0.0072);
 
 export default function LandingPage() {
   return (
@@ -132,40 +126,29 @@ export default function LandingPage() {
           <div className="relative">
             <div className="card overflow-hidden">
               <div className="flex items-center justify-between border-b border-line/70 px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-signal" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-signal" />
-                  </span>
-                  <span className="font-mono text-[11px] text-text">sprint · sector momentum</span>
-                </div>
-                <Badge tone="signal">evolving</Badge>
+                <span className="font-mono text-[11px] text-text">one request · real engine</span>
+                <Badge tone="signal">backtested</Badge>
               </div>
               <div className="space-y-3 px-4 py-4 font-mono text-[11px] leading-relaxed">
                 <p className="text-muted">
-                  <span className="text-beam">ideator</span> hypothesis: 12-1 momentum survives only with a
-                  trend filter.
+                  <span className="text-text">you</span> Create me a robust Nasdaq trading strategy.
                 </p>
                 <p className="text-muted">
-                  <span className="text-text">backtester</span> 24-config grid · best IS Sharpe 1.42 · trial
-                  #41
+                  <span className="text-beam">desk</span> universe, window and candidate families chosen.
                 </p>
-                <p className="text-danger/90">
-                  <span className="text-danger">skeptic</span> PBO 0.44 (gate 0.35) → reject this
-                  configuration.
+                <p className="text-muted">
+                  <span className="text-beam">engine</span> grid, walk-forward, CPCV, PBO, cost and delay
+                  stress.
                 </p>
                 <p className="text-signal/90">
-                  <span className="text-signal">orchestrator</span> variant queued · one axis changed ·
-                  holdout sealed.
+                  <span className="text-signal">result</span> metrics, equity curve and every gate, stored as
+                  a strategy you can open.
                 </p>
-              </div>
-              <div className="border-t border-line/70 px-2 pb-2 pt-3">
-                <EquityChart data={SAMPLE} height={170} />
               </div>
               <div className="grid grid-cols-3 divide-x divide-line/70 border-t border-line/70 text-center">
                 {[
-                  ["41", "trials counted"],
-                  ["1", "survivor"],
+                  ["10", "specialist agents"],
+                  ["1", "sealed holdout"],
                   ["0", "live hooks"],
                 ].map(([value, label]) => (
                   <div key={label} className="px-2 py-3">
@@ -175,7 +158,6 @@ export default function LandingPage() {
                 ))}
               </div>
             </div>
-            <p className="mt-3 text-right font-mono text-[10px] text-muted/60">Illustrative demo data</p>
           </div>
         </div>
       </section>
@@ -262,26 +244,16 @@ export default function LandingPage() {
             </p>
             <div className="mt-6 space-y-2.5">
               {[
-                ["DSR 0.93", "≥ 0.90 against 41 trials", true],
-                ["PBO 0.31", "≤ 0.35 overfit probability", true],
-                ["3× cost Sharpe 0.46", "≥ 0.30 after stress", true],
-                ["Holdout Sharpe 0.64", "opened once, after freeze", true],
-              ].map(([value, note, pass]) => (
+                ["Deflated Sharpe", "corrected for the org-wide trial count"],
+                ["PBO", "probability the winner is overfit"],
+                ["Cost and delay stress", "3× costs plus one extra bar"],
+                ["Sealed holdout", "opened once, after the configuration freezes"],
+              ].map(([title, note]) => (
                 <div
-                  key={value as string}
+                  key={title}
                   className="flex items-center justify-between rounded-lg border border-line/80 bg-graphite/60 px-3.5 py-2.5"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span
-                      className={cn(
-                        "grid h-4 w-4 place-items-center rounded-full",
-                        pass ? "bg-signal/15 text-signal" : "bg-danger/15 text-danger",
-                      )}
-                    >
-                      {pass ? <Check size={10} /> : <X size={10} />}
-                    </span>
-                    <span className="mono text-xs text-text">{value}</span>
-                  </div>
+                  <span className="mono text-xs text-text">{title}</span>
                   <span className="font-mono text-[10px] text-muted">{note}</span>
                 </div>
               ))}
@@ -289,24 +261,14 @@ export default function LandingPage() {
           </div>
           <div className="card overflow-hidden">
             <div className="flex items-center justify-between border-b border-line/70 px-4 py-3">
-              <span className="label">Candidate · out-of-sample</span>
-              <Badge tone="signal">validated</Badge>
+              <span className="label">What a chat request returns</span>
+              <Badge tone="signal">stored</Badge>
             </div>
-            <div className="px-2 pt-4">
-              <EquityChart data={equitySeries(200, 5, 0.0007, 0.0068)} height={220} />
-            </div>
-            <div className="grid grid-cols-4 divide-x divide-line/70 border-t border-line/70">
-              {[
-                ["1.14", "Sharpe"],
-                ["13.4%", "CAGR"],
-                ["-11.8%", "max DD"],
-                ["412", "trades"],
-              ].map(([value, label]) => (
-                <div key={label} className="px-3 py-3">
-                  <p className="mono text-sm text-text">{value}</p>
-                  <p className="label mt-1 text-[9px]">{label}</p>
-                </div>
-              ))}
+            <div className="space-y-3 px-5 py-6 text-sm leading-relaxed text-muted">
+              <p>Net Sharpe, CAGR, volatility, max drawdown and trade count on the visible sample.</p>
+              <p>An equity curve against the benchmark, plus every gate with its measured value.</p>
+              <p>The exact parameters, the signal code, and the sealed holdout window left untouched.</p>
+              <p>A permanent strategy record you can reopen, compare, or reject.</p>
             </div>
           </div>
         </div>
@@ -326,8 +288,8 @@ export default function LandingPage() {
                   Run the agents. Keep the receipts. Ship nothing you can&apos;t defend.
                 </h2>
                 <p className="mt-3 max-w-lg text-sm text-muted">
-                  Start with demo data in one click. Connect the API when you want real sprints, your own
-                  universe and a persistent audit trail.
+                  Sign in, open the chat and ask for a strategy. The engine measures it on real prices
+                  before any agent comments on it.
                 </p>
               </div>
               <Link

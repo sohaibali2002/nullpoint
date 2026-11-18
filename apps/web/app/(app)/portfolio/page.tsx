@@ -7,7 +7,6 @@ import { WeightBars } from "@/components/charts";
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { formatMetric, metricLabel, num, pct, when } from "@/lib/format";
-import { mockPortfolios, mockStrategies } from "@/lib/mock";
 import type { Portfolio, Strategy } from "@/lib/types";
 
 const METHODS = [
@@ -18,8 +17,8 @@ const METHODS = [
 ] as const;
 
 export default function PortfolioPage() {
-  const { data: strategies } = useApi<Strategy[]>("/strategies?sort=sharpe", mockStrategies);
-  const { data: portfolios, demo, reload } = useApi<Portfolio[]>("/portfolios", mockPortfolios);
+  const { data: strategies } = useApi<Strategy[]>("/strategies?sort=sharpe", []);
+  const { data: portfolios, demo, reload } = useApi<Portfolio[]>("/portfolios", []);
   const [selected, setSelected] = useState<string[]>([]);
   const [method, setMethod] = useState<(typeof METHODS)[number][0]>("hrp");
   const [result, setResult] = useState<Portfolio | null>(portfolios[0] ?? null);
@@ -50,7 +49,7 @@ export default function PortfolioPage() {
       return;
     }
     if (!getToken()) {
-      setError("Demo mode: portfolio construction runs on stored experiment returns and needs the API.");
+      setError("Not signed in: portfolio construction runs on stored experiment returns and needs the API.");
       return;
     }
     setBusy(true);

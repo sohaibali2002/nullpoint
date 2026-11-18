@@ -73,10 +73,10 @@ cd apps/web && npm install && npm run dev`}
                 </pre>
               </div>
               <div>
-                <p className="label mb-2">3 · Deterministic demo, no keys</p>
+                <p className="label mb-2">3 · Offline agents, no keys</p>
                 <pre className="overflow-x-auto rounded-lg border border-line/70 bg-ink/60 px-3.5 py-3 font-mono text-[11px] leading-relaxed text-muted">
-{`LLM_PROVIDER=mock JOB_RUNNER=sync make api
-python scripts/demo_sprint.py --synthetic`}
+{`LLM_PROVIDER=mock make api
+# then sign in and ask the chat for a strategy`}
                 </pre>
               </div>
               <Notice tone="beam">

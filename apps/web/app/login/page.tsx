@@ -1,7 +1,6 @@
 "use client";
 
 import { ArrowRight } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -55,8 +54,8 @@ export default function LoginPage() {
               Ten agents. One rule.
             </h1>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted">
-              Nothing ships until it beats the null. Sign in to run real sprints against your own
-              universe, or continue with the deterministic demo.
+              Nothing ships until it beats the null. Sign in to run real backtests against your own
+              universe, on real market data.
             </p>
             <div className="mt-8 space-y-2 font-mono text-[11px] text-muted">
               <p><span className="text-signal">✓</span> sealed holdout, hashed before agents start</p>
@@ -139,20 +138,9 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="my-6 flex items-center gap-3">
-            <div className="h-px flex-1 bg-line" />
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted">or</span>
-            <div className="h-px flex-1 bg-line" />
-          </div>
-
-          <Link
-            href="/dashboard"
-            className="focus-ring flex w-full items-center justify-center rounded-lg border border-line bg-slate/60 px-3.5 py-2.5 text-sm text-text hover:border-muted/40"
-          >
-            Continue with demo data
-          </Link>
           <p className="mt-4 text-center text-[11px] leading-relaxed text-muted">
-            Demo mode is deterministic and labelled everywhere. No account, no market data.
+            Every workspace is a real account. There is no shared or pre-seeded login, so the desk only
+            ever shows your own conversations and strategies.
           </p>
         </div>
       </div>

@@ -5,15 +5,14 @@ import { useState } from "react";
 
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
-import { mockProviders, mockUniverses } from "@/lib/mock";
 import type { Provider, Universe } from "@/lib/types";
 
 export default function DataPage() {
   const { data: providerData, demo } = useApi<{ providers: Provider[]; policy: string }>(
     "/data/providers",
-    { providers: mockProviders, policy: "Free tiers only; check each licence before commercial use." },
+    { providers: [], policy: "Free tiers only; check each licence before commercial use." },
   );
-  const { data: universes } = useApi<Universe[]>("/data/universes", mockUniverses);
+  const { data: universes } = useApi<Universe[]>("/data/universes", []);
   const [symbol, setSymbol] = useState("SPY");
   const [preview, setPreview] = useState<{ rows: Record<string, number | string>[]; meta?: any } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +23,7 @@ export default function DataPage() {
     setError(null);
     setPreview(null);
     if (!getToken()) {
-      setError("Demo mode: cached previews need a signed-in session and a seeded data lake.");
+      setError("Not signed in: cached previews need a signed-in session and a seeded data lake.");
       return;
     }
     setBusy(true);

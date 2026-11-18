@@ -222,7 +222,7 @@ export function DataStamp({ demo, source }: { demo: boolean; source?: string }) 
   return (
     <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
       <span className={cn("h-1.5 w-1.5 rounded-full", demo ? "bg-warn" : "bg-signal")} />
-      {demo ? "demo data" : source ?? "live api"}
+      {demo ? "not signed in" : source ?? "live api"}
     </span>
   );
 }

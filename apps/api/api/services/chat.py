@@ -24,6 +24,7 @@ from agents.roster import AGENT_SPECS
 from agents.search import SearchRouter
 from api.config import Settings
 from api.models import ChatMessage, ChatThread, LLMUsage, Memory, Strategy, new_id
+from api.services import desk as desk_service
 
 CHAT_PREAMBLE = (
     "You are in a direct, multi-turn conversation with the operator. Be conversational and concise, "
@@ -56,7 +57,7 @@ ROOM_SYNTHESIS = (
 UI_BLOCK_TYPES: frozenset[str] = frozenset(
     {"brief", "evidence", "attachment", "metrics", "table", "chart", "checklist", "gates", "callout"}
 )
-MAX_UI_BLOCKS = 4
+MAX_UI_BLOCKS = 6
 UI_INSTRUCTION = (
     "You may append at most one fenced ```ui block containing a JSON object (or array of objects) "
     "the operator's client renders natively. Allowed shapes: "
@@ -608,6 +609,7 @@ def append_user_message(
     )
     if thread.title in {
         "New conversation",
+        "New chat",
         "New research room",
         "New auto research",
         f"New conversation with {agent_name(thread.agent)}",
@@ -717,6 +719,70 @@ def _agent_turn(
     return message
 
 
+def _maybe_backtest(
+    db: Session,
+    thread: ChatThread,
+    latest_user: ChatMessage,
+    settings: Settings,
+) -> str:
+    """Run a real backtest when the operator asks for a strategy, once per user turn.
+
+    The measurement is deterministic: it is posted as its own message with the engine's numbers
+    and only then handed to the model, so the prose cannot drift away from what was measured.
+    """
+    if not desk_service.detect_backtest_request(latest_user.content):
+        return ""
+    already = (
+        db.execute(
+            select(ChatMessage).where(
+                ChatMessage.thread_id == thread.id,
+                ChatMessage.kind == "backtest",
+                ChatMessage.created_at >= latest_user.created_at,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if already is not None:
+        return already.content
+    try:
+        run = desk_service.run_nasdaq_backtest(db, thread.org_id, latest_user.content, settings)
+    except Exception as exc:
+        failure = (
+            "The backtest could not run, so no numbers were produced. "
+            f"Engine error: {type(exc).__name__}: {exc}"
+        )
+        _save_message(
+            db,
+            thread,
+            role="assistant",
+            agent="backtester",
+            content=failure,
+            kind="message",
+            model="engine:native",
+        )
+        return failure
+    _save_message(
+        db,
+        thread,
+        role="assistant",
+        agent="backtester",
+        content=desk_service.message_content(run),
+        kind="backtest",
+        model="engine:native",
+        sources=[
+            {
+                "id": "BT",
+                "title": f"Stored backtest · {run.name}",
+                "url": f"/strategies/{run.strategy_id}",
+                "provider": "engine",
+                "snippet": "Measured on the visible sample with the sealed holdout untouched.",
+            }
+        ],
+    )
+    return desk_service.summary_text(run)
+
+
 def _delta_callback(
     agent: str, on_delta: Callable[[str, str, str], None] | None
 ) -> Callable[[str], None] | None:
@@ -789,16 +855,24 @@ def generate_reply(
     if not history:
         raise ValueError("cannot generate a reply without a user message")
     latest = history[-1].content
+    latest_user = next((item for item in reversed(history) if item.role == "user"), history[-1])
+    measured = _maybe_backtest(db, thread, latest_user, settings)
     sources = _web_sources(latest, settings, limit=DEEP_WEB_SOURCES if deep else MAX_WEB_SOURCES) if use_web else []
     context = _context_block(db, thread.org_id, latest, settings, sources=sources)
+    if measured:
+        context = measured + "\n\n" + context
     return _agent_turn(
         db,
         thread,
         agent=thread.agent,
         instruction=(
-            "Answer the operator's latest message. Stay in your role. If the question needs "
-            "evidence, say what evidence would settle it and what the next sprint should test. "
-            "When web sources are supplied, cite them as [S1], [S2] and do not invent citations."
+            "Answer the operator's latest message. Stay in your role and write like a helpful "
+            "colleague in a normal chat: lead with the answer, keep it tight. If a measured "
+            "backtest is in the context, interpret those exact numbers, say plainly whether the "
+            "edge survived, and name the one thing that would break it. Never invent a metric, "
+            "never present an in-sample grid result as evidence, and never call a backtest a "
+            "forecast. When web sources are supplied, cite them as [S1], [S2]; never invent "
+            "citations. If the question needs a longer study, say what the next sprint should test."
         ),
         context=context,
         settings=settings,
@@ -820,6 +894,7 @@ def generate_room_round(
     deep: bool = False,
     on_delta: Callable[[str, str, str], None] | None = None,
 ) -> None:
+    """Run one visible specialist room round, persisted turn by turn."""
     """Run one visible room round and persist every turn as it is produced."""
     participants = [
         key
@@ -893,6 +968,7 @@ def generate_room_round(
             sources=sources,
         )
 
+    measured = _maybe_backtest(db, thread, latest_user, settings)
     context = _context_block(
         db,
         thread.org_id,
@@ -900,6 +976,8 @@ def generate_room_round(
         settings,
         sources=sources,
     )
+    if measured:
+        context = measured + "\n\n" + context
 
     ordered = [key for key in participants if key != "skeptic"]
     if "skeptic" in participants:

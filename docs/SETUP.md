@@ -58,13 +58,9 @@ Without Docker, `local` is used (development only). Never expose the local backe
 
 ## Data
 
-The lake is `LAKE_ROOT` (default `./artifacts/lake`). First sprint downloads bars through Yahoo/Stooq
-and caches Parquet. To work offline:
-
-```bash
-export ALLOW_NETWORK=false
-python scripts/demo_sprint.py --synthetic
-```
+The lake is `LAKE_ROOT` (default `./artifacts/lake`). The first backtest downloads bars through
+Yahoo/Stooq and caches Parquet. To work offline, set `ALLOW_NETWORK=false`; the loader then falls back
+to clearly labelled synthetic prices.
 
 Synthetic runs are labelled in the API, ledger, tearsheet and UI.
 
@@ -124,5 +120,5 @@ npm --prefix apps/web run build
 | Results say `synthetic: true` | Network disabled or providers failed. Expected offline behaviour, not market evidence. |
 | `EngineUnavailable` | Optional adapter not installed; use the native engine or install the extra. |
 | Worker does nothing | Redis unreachable. Check `REDIS_URL`; use `JOB_RUNNER=subprocess` as a fallback. |
-| Web shows demo data after login | Token missing/expired, or API proxy cannot reach `API_INTERNAL_URL`. |
+| Web shows "not signed in" after login | Token missing/expired, or API proxy cannot reach `API_INTERNAL_URL`. |
 | Sandbox scanner rejects code | The AST allowlist rejected the code; inspect the strategy error. Do not disable the scanner. |

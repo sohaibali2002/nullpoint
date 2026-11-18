@@ -7,16 +7,16 @@ import { EquityChart } from "@/components/charts";
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { pct, usd } from "@/lib/format";
-import { equitySeries, mockPaper, mockStrategies } from "@/lib/mock";
+import { EMPTY_PAPER } from "@/lib/empty";
 import type { PaperRun, Strategy } from "@/lib/types";
 
 export default function PaperPage() {
-  const { data: runs, demo, reload } = useApi<PaperRun[]>("/paper", mockPaper);
-  const { data: strategies } = useApi<Strategy[]>("/strategies", mockStrategies);
+  const { data: runs, demo, reload } = useApi<PaperRun[]>("/paper", []);
+  const { data: strategies } = useApi<Strategy[]>("/strategies", []);
   const [selected, setSelected] = useState<string | null>(runs[0]?.run_id ?? null);
   const { data: detail, reload: reloadDetail } = useApi<PaperRun>(
     selected ? `/paper/${selected}` : null,
-    { ...(runs[0] ?? mockPaper[0]), curve: equitySeries(30, 3, 0.0004, 0.004).map((p) => ({ ...p, ret: 0 })) },
+    { ...EMPTY_PAPER, ...(runs[0] ?? {}), curve: [] },
   );
   const [strategyId, setStrategyId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,13 +26,13 @@ export default function PaperPage() {
   const paperReady = strategies.filter((s) => s.status === "paper");
   const curve = detail?.curve?.length
     ? detail.curve.map((point) => ({ date: point.date, equity: point.equity }))
-    : equitySeries(30, 3, 0.0004, 0.004);
+    : [];
 
   const start = async () => {
     setError(null);
     setNotice(null);
     if (!getToken()) {
-      setError("Demo mode: start paper runs after signing in and approving a strategy.");
+      setError("Not signed in: start paper runs after signing in and approving a strategy.");
       return;
     }
     if (!strategyId) {
@@ -57,7 +57,7 @@ export default function PaperPage() {
 
   const advance = async () => {
     if (!getToken() || !selected) {
-      setError("Demo mode: advancing a run needs a signed-in session.");
+      setError("Not signed in: advancing a run needs a signed-in session.");
       return;
     }
     setBusy(true);
@@ -74,7 +74,7 @@ export default function PaperPage() {
 
   const stop = async () => {
     if (!getToken() || !selected) {
-      setError("Demo mode: stopping a run needs a signed-in session.");
+      setError("Not signed in: stopping a run needs a signed-in session.");
       return;
     }
     setBusy(true);
@@ -105,7 +105,13 @@ export default function PaperPage() {
           action={detail && <StatusBadge status={detail.status} />}
         >
           <div className="px-2 pt-4">
-            <EquityChart data={curve} height={250} />
+            {curve.length ? (
+              <EquityChart data={curve} height={250} />
+            ) : (
+              <p className="px-4 py-12 text-center text-xs text-muted">
+                No paper run selected. Start one from an approved strategy to see its simulated equity.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-3 divide-x divide-line/60 border-t border-line/60">
             {[

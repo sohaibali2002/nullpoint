@@ -6,11 +6,10 @@ import { useState } from "react";
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel } from "@/components/ui";
 import { api, getToken, useApi } from "@/lib/api";
 import { when } from "@/lib/format";
-import { mockIdeas } from "@/lib/mock";
 import type { Idea } from "@/lib/types";
 
 export default function IdeasPage() {
-  const { data: ideas, demo, reload } = useApi<Idea[]>("/ideas", mockIdeas);
+  const { data: ideas, demo, reload } = useApi<Idea[]>("/ideas", []);
   const [title, setTitle] = useState("");
   const [hypothesis, setHypothesis] = useState("");
   const [family, setFamily] = useState("cross_sectional");
@@ -23,7 +22,7 @@ export default function IdeasPage() {
     setError(null);
     setNotice(null);
     if (!getToken()) {
-      setError("Demo mode: signing in lets the librarian embed and deduplicate your idea.");
+      setError("Not signed in: signing in lets the librarian embed and deduplicate your idea.");
       return;
     }
     setBusy(true);

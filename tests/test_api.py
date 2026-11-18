@@ -216,13 +216,14 @@ def test_research_room_debates_and_synthesizes(api):
     ).status_code == 400
 
 
-def test_auto_research_chooses_specialists(api):
+def test_auto_chat_replies_in_one_turn(api):
+    """A normal chat: one desk reply per message, not a multi-agent room round."""
     token = _register(api, "auto@example.com", "Auto Desk")
     created = api.post("/chats", headers=_auth(token), json={"auto": True})
     assert created.status_code == 201, created.text
     thread = created.json()["thread"]
     assert thread["mode"] == "auto"
-    assert thread["agent_name"] == "Auto research"
+    assert thread["title"] == "New chat"
     assert thread["participants"] == []
 
     sent = api.post(
@@ -233,10 +234,10 @@ def test_auto_research_chooses_specialists(api):
     assert sent.status_code == 200, sent.text
     payload = sent.json()
     assert payload["thread"]["mode"] == "auto"
-    assert "skeptic" in payload["thread"]["participants"]
-    assert "risk_analyst" in payload["thread"]["participants"]
+    assert payload["thread"]["participants"] == []
+    assert [message["role"] for message in payload["messages"]] == ["user", "assistant"]
     assert payload["messages"][-1]["agent"] == "orchestrator"
-    assert payload["messages"][-1]["kind"] == "synthesis"
+    assert payload["messages"][-1]["kind"] == "message"
 
 
 def test_synthesis_serializes_structured_ui():
@@ -355,7 +356,7 @@ def test_general_chat_accepts_an_attached_file(api):
     assert any(message["kind"] == "attachment" for message in detail["messages"])
 
 
-def test_deep_auto_room_uses_all_core_specialists(api):
+def test_deep_auto_chat_stays_a_single_reply(api):
     token = _register(api, "deep@example.com", "Deep Desk")
     thread = api.post("/chats", headers=_auth(token), json={"auto": True}).json()["thread"]
     sent = api.post(
@@ -366,16 +367,8 @@ def test_deep_auto_room_uses_all_core_specialists(api):
     assert sent.status_code == 200, sent.text
     payload = sent.json()
     assert payload["thread"]["mode"] == "auto"
-    assert set(payload["thread"]["participants"]) >= {
-        "ideator",
-        "data_engineer",
-        "strategy_coder",
-        "backtester",
-        "risk_analyst",
-        "portfolio_constructor",
-        "skeptic",
-    }
-    assert len([message for message in payload["messages"] if message["kind"] == "analysis"]) == 7
+    assert [message["role"] for message in payload["messages"]] == ["user", "assistant"]
+    assert not [message for message in payload["messages"] if message["kind"] == "analysis"]
 
 
 def test_knowledge_upload_and_shared_library(api):

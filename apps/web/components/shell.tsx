@@ -173,7 +173,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <p className="truncate text-[13px] font-medium text-text">{title}</p>
             </div>
             <div className="ml-auto flex items-center gap-2">
-              {signedIn === false && <Badge tone="warn">demo</Badge>}
+              {signedIn === false && <Badge tone="warn">signed out</Badge>}
               <Badge tone="signal" className="hidden sm:inline-flex">
                 0 live hooks
               </Badge>

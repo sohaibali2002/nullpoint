@@ -8,24 +8,21 @@ import { useMemo, useState } from "react";
 import { Badge, Button, DataStamp, Notice, Panel, PageHeader, StatusBadge } from "@/components/ui";
 import { api, getToken, useApi, useLiveMessages } from "@/lib/api";
 import { usd, when } from "@/lib/format";
-import { mockAgentMessages, mockSprints } from "@/lib/mock";
+import { EMPTY_SPRINT } from "@/lib/empty";
 import type { Sprint } from "@/lib/types";
 
 export default function SprintDetailPage() {
   const params = useParams<{ id: string }>();
-  const sprintId = params?.id ?? mockSprints[0].id;
-  const fallback = useMemo(
-    () => mockSprints.find((s) => s.id === sprintId) ?? mockSprints[0],
-    [sprintId],
-  );
+  const sprintId = params?.id ?? "";
+  const fallback = useMemo(() => ({ ...EMPTY_SPRINT, id: sprintId }), [sprintId]);
   const { data: sprint, demo, reload } = useApi<Sprint>(`/sprints/${sprintId}`, fallback);
-  const { messages, demo: messagesDemo } = useLiveMessages(sprintId, mockAgentMessages);
+  const { messages, demo: messagesDemo } = useLiveMessages(sprintId, []);
   const [error, setError] = useState<string | null>(null);
   const isDemo = demo || messagesDemo;
 
   const kill = async () => {
     if (!getToken()) {
-      setError("Demo mode: stop requests need a signed-in session.");
+      setError("Stop requests need a signed-in session.");
       return;
     }
     try {
@@ -89,7 +86,7 @@ export default function SprintDetailPage() {
       <div className="mt-3 grid gap-3 xl:grid-cols-[1.55fr_1fr]">
         <Panel
           title="Agent audit trail"
-          eyebrow={isDemo ? "demo replay" : "persisted, resumable"}
+          eyebrow={isDemo ? "not signed in" : "persisted, resumable"}
           action={<Badge tone="beam">{messages.length} events</Badge>}
         >
           <ol className="divide-y divide-line/60">

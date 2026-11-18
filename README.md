@@ -69,32 +69,23 @@ No key? Set `LLM_PROVIDER=mock` (the default in tests). The mock provider runs t
 backtests and validation gates deterministically. With `OPENROUTER_API_KEY` set, `LLM_PROVIDER=auto`
 uses free OpenRouter models by default; set `MODEL_*` to a paid model only if you want one.
 
-### One command demo
+### First backtest
+
+Sign in, open `/chat` and ask for a strategy, for example
+`Create me a robust nasdaq trading strategy`. The desk picks a universe and candidate families, runs
+the real grid and gauntlet on market data, and posts the measured metrics, equity curve, every gate
+and a link to the stored strategy. Nothing in the UI is fabricated: before a session loads, pages show
+empty states, and with no token they show that you are not signed in.
 
 ```bash
-python scripts/demo_sprint.py --synthetic
-```
-
-This creates a demo org (`demo@nullpoint.local` / `nullpoint-demo`), runs a complete sprint offline,
-and prints the sprint id, trials, spend, strategies and tearsheet paths. Without `--synthetic` it tries
-Yahoo/Stooq first and labels the dataset accordingly.
-
-```bash
-make seed           # demo org + ideas + sprint + portfolio
 make tearsheet      # re-render standalone HTML tearsheets into artifacts/
-make demo           # sprint on SPY/QQQ + sector ETFs
 ```
-
-### Web without the API
-
-The UI runs in **demo mode** when no token is present: deterministic, labelled demo data, all pages and
-charts usable. Sign in at `/login` after starting the API to use real sprints.
 
 ## Repository layout
 
 ```
 apps/api/          FastAPI app (routers, services, jobs, models, security)
-apps/web/          Next.js 15 app (brand, pages, charts, API client, demo data)
+apps/web/          Next.js 15 app (brand, pages, charts, API client)
 engine/            backtest engine, features, metrics, portfolio, validation gauntlet
 agents/            roster, orchestrator, bus, tools, templates, tearsheets, embeddings
 data/              providers, quality checks, Parquet/DuckDB lake, universes, pipeline
@@ -255,7 +246,6 @@ reference topology. Deployment is intentionally manual: this repository does not
 - [Security](docs/SECURITY.md)
 - [Data licences and bias](docs/DATA_LICENSES.md)
 - [Setup](docs/SETUP.md)
-- [Demo](docs/DEMO.md)
 - [Decisions](docs/DECISIONS.md)
 
 ## Limitations

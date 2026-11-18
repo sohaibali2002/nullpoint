@@ -89,6 +89,8 @@ export interface ChatBlock {
   count?: number;
   providers?: string[];
   filename?: string;
+  /** Optional in-app destination, e.g. a stored strategy or project. */
+  link?: string | null;
 }
 
 export interface KnowledgeStats {

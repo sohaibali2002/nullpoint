@@ -6,11 +6,10 @@ import Link from "next/link";
 import { Badge, DataStamp, PageHeader, Panel } from "@/components/ui";
 import { useApi } from "@/lib/api";
 import { formatMetric, when } from "@/lib/format";
-import { mockExperiments } from "@/lib/mock";
 import type { Experiment } from "@/lib/types";
 
 export default function ExperimentsPage() {
-  const { data: experiments, demo } = useApi<Experiment[]>("/experiments?limit=100", mockExperiments);
+  const { data: experiments, demo } = useApi<Experiment[]>("/experiments?limit=100", []);
   const trials = new Set(experiments.map((experiment) => experiment.trial_index).filter(Boolean)).size;
 
   return (
@@ -25,7 +24,7 @@ export default function ExperimentsPage() {
       <div className="mb-3 grid gap-3 sm:grid-cols-3">
         {[
           ["Ledger entries", String(experiments.length), "this view"],
-          ["Distinct trials", String(trials || 41), "org-wide counter"],
+          ["Distinct trials", String(trials), "org-wide counter"],
           ["Out-of-sample", String(experiments.filter((e) => e.is_oos).length), "walk-forward / stress"],
         ].map(([label, value, hint]) => (
           <div key={label} className="card px-4 py-4">

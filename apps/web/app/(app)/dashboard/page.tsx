@@ -3,20 +3,19 @@
 import { ArrowUpRight, Coins, FlaskConical, ShieldCheck, Waypoints } from "lucide-react";
 import Link from "next/link";
 
-import { EquityChart } from "@/components/charts";
 import { Badge, DataStamp, Notice, Panel, PageHeader, Stat, StatusBadge } from "@/components/ui";
 import { useApi } from "@/lib/api";
+import { EMPTY_DASHBOARD } from "@/lib/empty";
 import { pct, usd, when } from "@/lib/format";
-import { equitySeries, mockDashboard } from "@/lib/mock";
 
 export default function DashboardPage() {
-  const { data, demo, loading } = useApi("/dashboard", mockDashboard);
+  const { data, demo, loading } = useApi("/dashboard", EMPTY_DASHBOARD);
   const counts = data.strategy_counts ?? {};
   const promoted = (counts.candidate ?? 0) + (counts.paper ?? 0);
   const rejected = counts.rejected ?? 0;
   const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
   const passRate = total ? promoted / total : 0;
-  const curve = equitySeries(220, 9, 0.00058, 0.0068);
+  const lead = data.leaderboard[0];
 
   return (
     <div>
@@ -67,19 +66,16 @@ export default function DashboardPage() {
 
       <div className="mt-3 grid gap-3 xl:grid-cols-[1.6fr_1fr]">
         <Panel
-          title="Candidate equity · visible sample"
-          eyebrow="out-of-sample folds, net of 3× costs"
+          title="Best promoted candidate"
+          eyebrow="net Sharpe on the visible sample"
           action={<Badge tone="signal">sealed holdout intact</Badge>}
         >
-          <div className="px-2 pt-4">
-            <EquityChart data={curve} height={248} />
-          </div>
-          <div className="grid grid-cols-2 divide-x divide-line/60 border-t border-line/60 sm:grid-cols-4">
+          <div className="grid grid-cols-2 divide-x divide-line/60 border-b border-line/60 sm:grid-cols-4">
             {[
-              ["1.14", "Sharpe"],
-              ["13.4%", "CAGR"],
-              ["-11.8%", "Max drawdown"],
-              ["0.64", "Holdout Sharpe"],
+              [lead ? Number(lead.metrics.sharpe ?? 0).toFixed(2) : "—", "Sharpe"],
+              [lead ? pct(Number(lead.metrics.cagr ?? 0)) : "—", "CAGR"],
+              [lead ? pct(Number(lead.metrics.max_drawdown ?? 0)) : "—", "Max drawdown"],
+              [lead?.universe?.slice(0, 3).join(" · ") || "—", "Universe"],
             ].map(([value, label]) => (
               <div key={label} className="px-4 py-3">
                 <p className="mono text-sm text-text">{value}</p>
@@ -87,17 +83,26 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+          <div className="px-4 py-4 text-xs leading-relaxed text-muted">
+            {lead ? (
+              <Link href={`/strategies/${lead.id}`} className="text-text hover:text-signal">
+                {lead.name} →
+              </Link>
+            ) : (
+              "No promoted strategy yet. Open the chat and ask the desk for a backtest."
+            )}
+          </div>
         </Panel>
 
         <Panel title="Where attempts die" eyebrow="funnel across stored strategies">
           <div className="space-y-4 px-5 py-5">
             {[
-              ["Ideas recorded", total + 12, "text-muted"],
+              ["Strategies stored", total, "text-muted"],
               ["Backtested", (counts.backtested ?? 0) + promoted + rejected, "text-beam"],
               ["Survived validation", (counts.validated ?? 0) + promoted, "text-signal"],
               ["Approved for paper", counts.paper ?? 0, "text-warn"],
             ].map(([label, value, tone], index) => {
-              const max = total + 12;
+              const max = Math.max(1, total);
               const width = Math.max(6, (Number(value) / max) * 100);
               return (
                 <div key={label as string}>
@@ -216,7 +221,7 @@ export default function DashboardPage() {
 
       <div className="mt-3 flex flex-col justify-between gap-2 text-[10px] text-muted/70 md:flex-row">
         <span className="font-mono uppercase tracking-[0.12em]">
-          <Waypoints size={11} className="mr-1 inline" /> {loading ? "syncing" : demo ? "demo dataset" : "live api"}
+          <Waypoints size={11} className="mr-1 inline" /> {loading ? "syncing" : demo ? "not signed in" : "live api"}
         </span>
         <span>Research only. Not investment advice. Backtests are hypotheses, not forecasts.</span>
       </div>

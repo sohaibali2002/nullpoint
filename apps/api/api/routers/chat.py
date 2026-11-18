@@ -90,7 +90,7 @@ def create_thread(
             agent="orchestrator",
             mode="auto",
             participants=[],
-            title=(payload.title or "New auto research").strip(),
+            title=(payload.title or "New chat").strip(),
         )
     elif requested:
         participants = list(dict.fromkeys(item for item in requested if item != "orchestrator"))
@@ -183,11 +183,13 @@ def _run_generation(
         if thread is None:
             holder["error"] = "conversation disappeared"
             return
-        if thread.mode in {"room", "auto"}:
+        if thread.mode == "room":
             chat_service.generate_room_round(
                 session, thread, settings=settings, use_web=use_web, deep=deep, on_delta=on_delta
             )
         else:
+            # A normal chat: one desk reply, with a real backtest whenever the operator asks
+            # for a strategy.  Explicit rooms keep their multi-agent round.
             chat_service.generate_reply(
                 session, thread, settings=settings, use_web=use_web, deep=deep, on_delta=on_delta
             )
@@ -374,7 +376,7 @@ def send_message(
         raise HTTPException(status_code=400, detail="message cannot be empty")
     chat_service.append_user_message(db, thread, content)
     try:
-        if thread.mode in {"room", "auto"}:
+        if thread.mode == "room":
             chat_service.generate_room_round(
                 db, thread, settings=settings, use_web=payload.use_web, deep=payload.deep
             )

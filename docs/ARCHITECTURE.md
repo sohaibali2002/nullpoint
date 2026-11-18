@@ -86,8 +86,8 @@ updated once per batch, never touched from a worker thread. Data downloads use t
 
 Next.js App Router. `/api/*` is rewritten server-side to the API origin, so the browser only talks to
 its own origin (no CORS, no exposed internal host). Pages are client components using a small
-`useApi` hook. With no token, the hook returns deterministic demo data and every screen labels it
-"demo data". Charts use Recharts and the brand palette; metrics use JetBrains Mono.
+`useApi` hook. With no token the hook returns empty defaults and every screen shows a "not signed in"
+state instead of fabricated rows. Charts use Recharts and the brand palette; metrics use JetBrains Mono.
 
 ## Failure modes
 

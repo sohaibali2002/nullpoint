@@ -7,13 +7,12 @@ import { useMemo, useState } from "react";
 import { Badge, DataStamp, PageHeader, Panel, StatusBadge } from "@/components/ui";
 import { useApi } from "@/lib/api";
 import { formatMetric, num, when } from "@/lib/format";
-import { mockStrategies } from "@/lib/mock";
 import type { Strategy } from "@/lib/types";
 
 const FILTERS = ["all", "candidate", "validated", "paper", "rejected", "backtested"] as const;
 
 export default function StrategiesPage() {
-  const { data: strategies, demo } = useApi<Strategy[]>("/strategies?sort=sharpe", mockStrategies);
+  const { data: strategies, demo } = useApi<Strategy[]>("/strategies?sort=sharpe", []);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"sharpe" | "recent">("sharpe");

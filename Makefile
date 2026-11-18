@@ -46,12 +46,6 @@ type: ## Mypy
 
 check: lint type test ## All checks
 
-seed: ## Create schema and seed a demo org, ideas, strategies, experiments
-	$(PY) python scripts/seed.py
-
-demo: ## Autonomous sprint on SPY/QQQ + sector ETFs, offline-capable
-	$(PY) python scripts/demo_sprint.py
-
 tearsheet: ## Render HTML tearsheets for promoted strategies into artifacts/
 	$(PY) python scripts/make_tearsheet.py
 
