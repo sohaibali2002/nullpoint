@@ -18,6 +18,16 @@ def test_does_not_launch_the_engine_for_discussion() -> None:
     assert not desk.detect_backtest_request("")
 
 
+def test_follow_ups_leaning_on_a_measurement_are_recognised() -> None:
+    # "build it" has no subject of its own, so detection alone would refuse it.
+    assert not desk.detect_backtest_request("build it")
+    assert desk.is_follow_up("build it")
+    assert desk.is_follow_up("ok go ahead")
+    assert desk.is_follow_up("run it")
+    assert not desk.is_follow_up("what makes a strategy worth testing?")
+    assert not desk.is_follow_up("")
+
+
 def test_nasdaq_request_selects_the_nasdaq_universe() -> None:
     symbols, label = desk.parse_universe("Create me a robust nasdaq trading strategy")
     assert "QQQ" in symbols

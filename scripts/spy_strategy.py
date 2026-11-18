@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd
 from api.db import SessionLocal, init_db
-from api.models import Experiment, HoldoutEvaluation, Strategy, ValidationReport
+from api.models import Experiment, HoldoutEvaluation, Organization, Strategy, User, ValidationReport
+from api.security import hash_password
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from agents.tearsheet import render_tearsheet
 from agents.tools import DBTrialCounter
@@ -35,9 +38,35 @@ from data.providers import YFinanceProvider
 from engine.base import MarketData, get_adapter
 from engine.strategy import Costs, RiskRules, StrategySpec
 from engine.validation import sealed_holdout_split, validate_strategy
-from scripts.demo_sprint import ensure_account
 
 SYMBOL = "SPY"
+
+
+def owner_workspace(session: Session) -> tuple[Organization, User]:
+    """The workspace this validation run is stored under, created on first use.
+
+    The owner is given a random password, so no account exists that anyone can sign into.
+    """
+    org = session.execute(select(Organization)).scalars().first()
+    if org is None:
+        org = Organization(
+            name="Skeptical Capital", slug="skeptical-capital", monthly_budget_usd=0.0
+        )
+        session.add(org)
+        session.commit()
+        session.refresh(org)
+    user = session.execute(select(User).where(User.org_id == org.id)).scalars().first()
+    if user is None:
+        user = User(
+            org_id=org.id,
+            email="owner@nullpoint.local",
+            hashed_password=hash_password(secrets.token_urlsafe(24)),
+            role="owner",
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return org, user
 
 SIGNAL = '''def signal(features, params, close):
     """Long SPY only while price is above its long moving average.
@@ -175,7 +204,7 @@ def main() -> int:
     init_db()
     session = SessionLocal()
     try:
-        org, _user = ensure_account(session, "Skeptical Capital", "demo@nullpoint.local")
+        org, _user = owner_workspace(session)
         trial_counter = DBTrialCounter(session, org.id)
         report = validate_strategy(
             spec,

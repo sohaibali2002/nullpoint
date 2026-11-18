@@ -152,6 +152,17 @@ def detect_backtest_request(text: str) -> bool:
     return bool(subject) and bool(explicit or ask) and not question_only
 
 
+FOLLOW_UP_PATTERN = re.compile(
+    r"^(?:ok(?:ay)?|yes|yep|sure|go|go ahead|do it|run it|build it|make it|try it|proceed|continue|now|next)\b"
+)
+
+
+def is_follow_up(text: str) -> bool:
+    """A short affirmative or imperative follow-up that leans on the previous measurement."""
+    lowered = " ".join(str(text or "").lower().split())
+    return 0 < len(lowered) <= 80 and bool(FOLLOW_UP_PATTERN.match(lowered))
+
+
 def parse_universe(text: str) -> tuple[list[str], str]:
     lowered = str(text or "").lower()
     upper = re.findall(r"\b[A-Z]{2,5}\b", str(text or ""))
