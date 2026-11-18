@@ -11,6 +11,35 @@ from sqlalchemy.orm import sessionmaker
 from engine.base import MarketData
 
 
+def make_dataset(
+    symbols: Sequence[str],
+    start: str = "2016-01-01",
+    end: str = "2026-01-01",
+    *,
+    seed: int = 7,
+):
+    """In-memory panel for tests only; the product never invents prices."""
+    from datetime import UTC, datetime
+
+    from data.pipeline import Dataset
+
+    index = pd.bdate_range(start=start, end=end)
+    rng = np.random.default_rng(seed)
+    market = rng.normal(0.0004, 0.010, len(index))
+    frame = {}
+    for i, symbol in enumerate(symbols):
+        idio = rng.normal(0.0, 0.004 + 0.001 * i, len(index))
+        frame[symbol] = 100.0 * np.cumprod(1.0 + 0.6 * market + idio)
+    close = pd.DataFrame(frame, index=index)
+    return Dataset(
+        data=MarketData(close=close, benchmark=close[symbols[0]], provider="test"),
+        provider="test",
+        synthetic=False,
+        content_hash=MarketData(close=close).data_hash(),
+        fetched_at=datetime.now(UTC).isoformat(),
+    )
+
+
 def make_prices(
     n: int = 600,
     symbols: Sequence[str] = ("SPY", "QQQ", "XLK"),
@@ -62,7 +91,7 @@ def make_market_data(
     vol: float = 0.012,
 ) -> MarketData:
     close = make_prices(n=n, symbols=symbols, seed=seed, drift=drift, vol=vol)
-    return MarketData(close=close, benchmark=close[symbols[0]], provider="synthetic")
+    return MarketData(close=close, benchmark=close[symbols[0]], provider="test")
 
 
 @pytest.fixture
@@ -93,4 +122,4 @@ def noise_data() -> MarketData:
 @pytest.fixture
 def trending_data() -> MarketData:
     close = make_trending_prices()
-    return MarketData(close=close, benchmark=None, provider="synthetic")
+    return MarketData(close=close, benchmark=None, provider="test")

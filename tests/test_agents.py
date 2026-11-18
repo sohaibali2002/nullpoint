@@ -16,7 +16,7 @@ from engine.base import MarketData
 from engine.strategy import StrategySpec
 from engine.validation import future_canary
 from sandbox.scanner import scan_code
-from tests.conftest import make_prices
+from tests.conftest import make_dataset, make_prices
 
 
 def _seed_org(session) -> tuple[Organization, Sprint]:
@@ -140,8 +140,13 @@ def _positions(spec: StrategySpec, close: pd.DataFrame) -> pd.DataFrame:
     return NativeAdapter().run_backtest(spec, MarketData(close=close)).positions
 
 
-def test_sprint_runs_end_to_end_and_never_promotes_to_paper(db_session, tmp_path):
+def test_sprint_runs_end_to_end_and_never_promotes_to_paper(db_session, tmp_path, monkeypatch):
     org, sprint = _seed_org(db_session)
+
+    def fake_load_universe(symbols, *, start=None, end=None, **kwargs):
+        return make_dataset(symbols, start or "2016-01-01", end or "2026-01-01")
+
+    monkeypatch.setattr("agents.tools.load_universe", fake_load_universe)
     runner = SprintRunner(
         db_session,
         sprint.id,
@@ -151,7 +156,7 @@ def test_sprint_runs_end_to_end_and_never_promotes_to_paper(db_session, tmp_path
     result = runner.run()
     assert result["status"] == "completed"
     assert result["sealed_holdout"]["sealed"][0] < result["sealed_holdout"]["sealed"][1]
-    assert result["dataset"]["synthetic"] is True
+    assert result["dataset"]["synthetic"] is False
     assert result["trials"] > 0
     assert result["budget"]["spent_usd"] <= result["budget"]["budget_usd"]
 

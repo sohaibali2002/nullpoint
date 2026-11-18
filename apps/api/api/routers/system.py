@@ -25,7 +25,7 @@ from api.models import (
     TrialCounter,
 )
 from api.schemas import SettingsPatch
-from api.security import Principal, require_admin, safe_secret
+from api.security import Principal, require_admin
 from api.services.alerts import dispatch
 from data.providers import provider_catalog
 from engine.base import list_adapters
@@ -144,31 +144,11 @@ def get_settings(
             "cheap": settings.model_cheap,
         },
         "preferences": setting.payload if setting else {},
-        "keys": {
-            "anthropic": safe_secret(settings.anthropic_api_key),
-            "openai": safe_secret(settings.openai_api_key),
-            "openrouter": safe_secret(settings.openrouter_api_key),
-            "groq": safe_secret(settings.groq_api_key),
-            "deepseek": safe_secret(settings.deepseek_api_key),
-            "mistral": safe_secret(settings.mistral_api_key),
-            "xai": safe_secret(settings.xai_api_key),
-            "gemini": safe_secret(settings.gemini_api_key),
-            "llm": safe_secret(settings.llm_api_key),
-            "voyage": safe_secret(settings.voyage_api_key),
-            "tavily": safe_secret(settings.tavily_api_key),
-            "exa": safe_secret(settings.exa_api_key),
-            "firecrawl": safe_secret(settings.firecrawl_api_key),
-            "fred": safe_secret(settings.fred_api_key),
-            "alpha_vantage": safe_secret(settings.alphavantage_api_key),
-            "tiingo": safe_secret(settings.tiingo_api_key),
-            "polygon": safe_secret(settings.polygon_api_key),
-            "alpaca": safe_secret(settings.alpaca_api_key),
-            "slack": safe_secret(settings.slack_webhook_url),
-            "discord": safe_secret(settings.discord_webhook_url),
-            "sentry": safe_secret(settings.sentry_dsn),
-        },
         "adapters": list_adapters(),
-        "ignored_secrets": "Keys are never returned. Set them in the server environment, never in the UI.",
+        "ignored_secrets": (
+            "Provider credentials are server-side only (Vercel environment variables). "
+            "This app never asks for, accepts or returns a key."
+        ),
     }
 
 

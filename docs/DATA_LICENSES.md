@@ -25,9 +25,8 @@ summary, not legal advice; verify terms before commercial use.
 - **Revised macro data.** FRED series are revised. Without vintage data a macro backtest can see the
   future. Providers flagged `point_in_time: false` should be treated as indicative.
 - **Adjusted prices.** Split/dividend adjustments are not a substitute for total-return index data.
-- **Synthetic fallback.** When providers fail or network is disabled, the pipeline generates synthetic
-  prices. This is labelled `synthetic: true` in the dataset, experiment ledger, API responses, tearsheet
-  and UI. Synthetic results verify the pipeline only and are never market evidence.
+- **No synthetic fallback.** When providers fail or network is disabled the run fails with the provider
+  error. The pipeline never generates prices, so a result is either real market data or an error.
 - **Delisted assets.** Not modelled. Strategies that rely on shorting or illiquid names are optimistic.
 - **Costs.** Commission/spread/slippage/borrow are explicit and stressed at 2× and 3×, but real impact
   and capacity are not simulated.

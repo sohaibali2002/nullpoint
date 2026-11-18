@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, ArrowLeft, Lock, Square } from "lucide-react";
+import { ArrowLeft, Lock, Square } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -59,13 +59,6 @@ export default function SprintDetailPage() {
         }
       />
 
-      {dataset?.synthetic && (
-        <Notice tone="warn" className="mb-3">
-          <AlertTriangle size={12} className="mr-1.5 inline" />
-          This sprint ran on <strong>synthetic data</strong> because market data was unavailable. Results
-          verify the pipeline only and are not market evidence.
-        </Notice>
-      )}
       {error && <Notice tone="danger" className="mb-3">{error}</Notice>}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -143,7 +136,7 @@ export default function SprintDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted">Dataset</dt>
-                  <dd className="mono text-text">{dataset?.synthetic ? "synthetic" : dataset?.provider ?? "—"}</dd>
+                  <dd className="mono text-text">{dataset?.provider ?? "—"}</dd>
                 </div>
               </dl>
             </div>

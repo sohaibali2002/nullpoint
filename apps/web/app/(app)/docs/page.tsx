@@ -28,7 +28,7 @@ const ENDPOINTS = [
   ["POST", "/portfolios", "HRP / risk parity / inverse vol / mean variance"],
   ["POST", "/paper", "Start a simulated paper run (approval required)"],
   ["GET", "/data/providers", "Providers with licence notes and availability"],
-  ["GET", "/settings", "Runtime, model slots, key presence"],
+  ["GET", "/settings", "Runtime, model slots, server-managed config"],
   ["GET", "/usage", "LLM spend, trials and cost per candidate"],
   ["GET", "/health · /metrics", "Liveness and Prometheus metrics"],
 ];
@@ -72,17 +72,10 @@ make worker     # arq api.jobs.WorkerSettings
 cd apps/web && npm install && npm run dev`}
                 </pre>
               </div>
-              <div>
-                <p className="label mb-2">3 · Offline agents, no keys</p>
-                <pre className="overflow-x-auto rounded-lg border border-line/70 bg-ink/60 px-3.5 py-3 font-mono text-[11px] leading-relaxed text-muted">
-{`LLM_PROVIDER=mock make api
-# then sign in and ask the chat for a strategy`}
-                </pre>
-              </div>
               <Notice tone="beam">
                 <Terminal size={11} className="mr-1.5 inline" />
-                Free data has limits. Run with <code className="mono">ALLOW_NETWORK=false</code> to force the
-                clearly-labelled synthetic path when offline.
+                Free data has limits. When a provider cannot be reached the run fails with the provider
+                error; Nullpoint never substitutes generated prices for market data.
               </Notice>
             </div>
           </Panel>
@@ -109,7 +102,7 @@ cd apps/web && npm install && npm run dev`}
             </pre>
           </Panel>
 
-          <Panel title="API surface" eyebrow="Bearer JWT or X-API-Key">
+          <Panel title="API surface" eyebrow="Bearer JWT">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[620px] border-collapse">
                 <thead>
@@ -168,7 +161,7 @@ cd apps/web && npm install && npm run dev`}
               </p>
               <p className="flex gap-2">
                 <BookOpen size={13} className="mt-0.5 shrink-0 text-signal" />
-                <span>Multi-tenant isolation on every query. API keys are stored hashed, shown once.</span>
+                <span>Multi-tenant isolation on every query. Provider credentials never leave the server.</span>
               </p>
             </div>
           </Panel>
@@ -179,8 +172,8 @@ cd apps/web && npm install && npm run dev`}
               <p>Stooq daily data is split-adjusted, not dividend-adjusted.</p>
               <p>Sector and mega-cap universes are current constituents: survivorship bias is recorded with
                 every result.</p>
-              <p>If market data is unavailable, the pipeline falls back to synthetic data — labelled in the
-                API, the ledger, the tearsheet and this UI.</p>
+              <p>If market data is unavailable the run stops with the provider error. There is no synthetic
+                fallback anywhere in the pipeline.</p>
             </div>
           </Panel>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { KeyRound, Save, SlidersHorizontal } from "lucide-react";
+import { Save, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, DataStamp, Notice, PageHeader, Panel } from "@/components/ui";
@@ -35,14 +35,13 @@ export default function SettingsPage() {
   };
 
   const runtime = settings.runtime ?? {};
-  const keys = Object.entries(settings.keys ?? {});
 
   return (
     <div>
       <PageHeader
         eyebrow="Workspace"
         title="Settings"
-        description="Budgets, model slots, provider keys and the safety envelope. Secrets are never returned in full; set them in the server environment."
+        description="Budgets, model slots and the safety envelope. Every provider credential lives on the server; nothing on this page asks for a key."
         actions={<DataStamp demo={demo} />}
       />
 
@@ -143,24 +142,27 @@ export default function SettingsPage() {
             ))}
           </ul>
           <p className="border-t border-line/60 px-4 py-3 text-[10px] text-muted">
-            Mock mode is a first-class provider: it runs the real tools and gates without an API key.
+            Models and provider credentials are fixed by the backend deployment. There is no key to
+            enter here.
           </p>
         </Panel>
 
-        <Panel title="Provider keys" eyebrow="presence only, never values">
-          <ul className="divide-y divide-line/60">
-            {keys.map(([name, value]) => (
-              <li key={name} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <span className="flex items-center gap-2 text-[11px] capitalize text-muted">
-                  <KeyRound size={11} /> {name.replaceAll("_", " ")}
-                </span>
-                {value ? <Badge tone="signal">configured</Badge> : <Badge>missing</Badge>}
+        <Panel title="Backend configuration" eyebrow="server-managed">
+          <p className="px-4 py-4 text-[11px] leading-relaxed text-muted">
+            {settings.ignored_secrets}
+          </p>
+          <ul className="divide-y divide-line/60 border-t border-line/60">
+            {[
+              ["Storage", "Vercel Postgres (Neon) via DATABASE_URL"],
+              ["Data sources", "public, key-free feeds only"],
+              ["Market data", "real prices; no synthetic substitute"],
+            ].map(([label, value]) => (
+              <li key={label} className="flex items-center justify-between gap-3 px-4 py-2.5 text-[11px]">
+                <span className="text-muted">{label}</span>
+                <span className="mono text-[10px] text-text">{value}</span>
               </li>
             ))}
           </ul>
-          <p className="border-t border-line/60 px-4 py-3 text-[10px] leading-relaxed text-muted">
-            {settings.ignored_secrets}
-          </p>
         </Panel>
       </div>
 

@@ -44,13 +44,13 @@ export default function DataPage() {
       <PageHeader
         eyebrow="Data explorer"
         title="Know what you are allowed to use."
-        description="Providers, licences, coverage and bias warnings are part of the research record. Synthetic data is labelled as synthetic everywhere it travels."
+        description="Providers, licences, coverage and bias warnings are part of the research record. Nullpoint runs on real prices only — there is no synthetic fallback and no key to enter."
         actions={<DataStamp demo={demo} />}
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
         {[
-          ["Providers", String(providers.length), `${providers.filter((p) => p.requires_key).length} require keys`],
+          ["Providers", String(providers.length), "public, key-free feeds"],
           ["Cached assets", "Parquet", "DuckDB query surface"],
           ["Point-in-time", String(providers.filter((p) => p.point_in_time).length), "flagged providers"],
         ].map(([label, value, hint]) => (
@@ -69,7 +69,6 @@ export default function DataPage() {
               <tr className="border-b border-line/60">
                 <th className="table-head">Provider</th>
                 <th className="table-head">Classes</th>
-                <th className="table-head">Access</th>
                 <th className="table-head">Rate limit</th>
                 <th className="table-head">Licence</th>
                 <th className="table-head">PIT</th>
@@ -82,14 +81,14 @@ export default function DataPage() {
                     <div className="flex items-center gap-2">
                       <Database size={12} className="text-beam" />
                       <span className="mono text-xs text-text">{provider.name}</span>
-                      {provider.available === false && <Badge tone="warn">key</Badge>}
+                      {provider.available === false && <Badge tone="warn">offline</Badge>}
                     </div>
                   </td>
                   <td className="table-cell font-mono text-[10px] text-muted">
                     {provider.asset_classes.join(" · ")}
                   </td>
                   <td className="table-cell text-[11px] text-muted">
-                    {provider.requires_key ? "API key" : "public"}
+                    cached Parquet lake
                   </td>
                   <td className="table-cell mono text-[10px] text-muted">{provider.rate_limit_per_min}/min</td>
                   <td className="table-cell max-w-[420px] text-[10px] leading-relaxed text-muted">

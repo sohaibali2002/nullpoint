@@ -91,7 +91,8 @@ state instead of fabricated rows. Charts use Recharts and the brand palette; met
 
 ## Failure modes
 
-- Data provider unavailable → fallback provider, then clearly labelled synthetic data.
+- Data provider unavailable → next provider in the chain; if all fail, the run fails with the provider
+  error. No synthetic prices are generated.
 - Engine exception inside a strategy → strategy rejected, sprint continues.
 - Budget/wall clock exhausted → sprint stops with `budget_exhausted` and partial results preserved.
 - Redis unavailable → API can fall back to a detached subprocess (`JOB_RUNNER=subprocess`).

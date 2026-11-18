@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from tests.conftest import make_dataset
+
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
@@ -32,6 +34,11 @@ def api(tmp_path, monkeypatch):
     # integration tests do not make later tests flaky.
     AUTH_LIMITER._state.clear()
     RATE_LIMITER._state.clear()
+    def fake_load_universe(symbols, *, start=None, end=None, **kwargs):
+        return make_dataset(symbols, start or "2016-01-01", end or "2026-01-01")
+
+    monkeypatch.setattr("agents.tools.load_universe", fake_load_universe)
+    monkeypatch.setattr("api.services.desk.load_universe", fake_load_universe)
     monkeypatch.setattr(settings, "job_runner", "sync")
     monkeypatch.setattr(settings, "allow_network", False)
     monkeypatch.setattr(settings, "llm_provider", "mock")
@@ -437,7 +444,7 @@ def test_sprint_launch_records_agents_and_never_papers(api):
     assert response.status_code == 202, response.text
     body = response.json()
     assert body["status"] == "completed"
-    assert body["result"]["dataset"]["synthetic"] is True
+    assert body["result"]["dataset"]["synthetic"] is False
     assert body["result"]["sealed_holdout"]["sealed"][0] < body["result"]["sealed_holdout"]["sealed"][1]
     sprint_id = body["id"]
 
@@ -572,8 +579,8 @@ def test_settings_usage_models_and_agents(api):
     assert settings_response.status_code == 200
     payload = settings_response.json()
     assert payload["runtime"]["live_trading_enabled"] is False
-    assert payload["keys"]["anthropic"] is None
-    assert "never returned" in str(payload["ignored_secrets"]).lower()
+    assert "keys" not in payload
+    assert "server-side only" in str(payload["ignored_secrets"]).lower()
 
     patched = api.patch("/settings", headers=_auth(token), json={"sprint_budget_usd": 3.5})
     assert patched.status_code == 200

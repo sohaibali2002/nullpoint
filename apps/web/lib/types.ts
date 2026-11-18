@@ -297,7 +297,6 @@ export interface SettingsData {
   runtime: Record<string, any>;
   models: Record<string, string>;
   preferences: Record<string, any>;
-  keys: Record<string, string | null>;
   adapters?: string[];
   ignored_secrets?: string;
 }

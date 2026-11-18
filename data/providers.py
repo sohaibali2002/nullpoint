@@ -632,12 +632,20 @@ def get_provider(
 
 
 def provider_catalog() -> list[dict[str, Any]]:
+    """Public catalog: only providers that work without a user-supplied key.
+
+    Key-gated vendors stay in the codebase for server-side deployments, but they are never
+    advertised or requested in the product.
+    """
     catalog: list[dict[str, Any]] = []
     for cls in PROVIDER_CLASSES.values():
         try:
-            catalog.append(cls().meta.as_dict())  # type: ignore[call-arg]
+            meta = cls().meta.as_dict()  # type: ignore[call-arg]
         except Exception:
-            catalog.append({"name": cls.__name__, "requires_key": True, "available": False})
+            continue
+        if meta.get("requires_key"):
+            continue
+        catalog.append(meta)
     return catalog
 
 

@@ -33,12 +33,13 @@ Research software only. Not investment advice, not a signal service, not a broke
   spread, slippage, borrow, stops, position caps and vol targeting. `vectorbt` and `backtesting.py`
   adapters are optional extras.
 - **Free data, honest labels.** Yahoo, Stooq, FRED, SEC EDGAR, Fama-French, Binance/ccxt, plus optional
-  Alpha Vantage/Tiingo/Polygon/Alpaca keys. Every provider carries its licence note; every universe
-  carries its survivorship-bias warning; synthetic fallback data is labelled at every layer.
+  Every provider carries its licence note; every universe carries its survivorship-bias warning.
+  Prices are always real market data: when a feed fails the run reports the provider error instead of
+  substituting generated prices.
 - **Registry and portfolio.** Strategy versioning, lineage, diff, embedding dedupe, experiment ledger
   with data/code hashes, HRP / risk parity / inverse-vol / mean-variance construction, paper trading
   with drift, alerts, cost dashboard.
-- **Product surface.** Next.js 15 app (dark-first brand, demo mode), FastAPI with JWT + API keys,
+- **Product surface.** Next.js 15 app (dark-first brand), FastAPI with JWT,
   SSE token streaming, Arq worker, Postgres or sqlite, Parquet/DuckDB lake, Prometheus metrics,
   Docker Compose, CI.
 
@@ -156,7 +157,7 @@ headline metrics until three things exist:
    (`holdout_evaluation` is uniquely constrained by strategy version);
 3. a paper run has at least `MIN_PAPER_DAYS` distinct forward days and no active drift alert.
 
-Simulator paper results are labelled synthetic. The gate returns explicit blockers instead of
+Simulator paper results are labelled as simulated. The gate returns explicit blockers instead of
 pretending missing evidence is a pass.
 
 ## Operations
@@ -221,7 +222,7 @@ See `.env.example`. Important variables:
 | `TAVILY_API_KEY` / `EXA_API_KEY` / `FIRECRAWL_API_KEY` | — | concurrent deep-research providers |
 | `MAX_WORKERS` | `0` | 0 auto-detects CPU/cgroup budget; 1 forces sequential |
 | `JOB_RUNNER` | `auto` | `arq`, `subprocess` or `sync` (tests only) |
-| `ALLOW_NETWORK` | `true` | false forces the labelled synthetic path |
+| `ALLOW_NETWORK` | `true` | false disables fetches; runs then fail with a data-unavailable error |
 | `LAKE_ROOT` | `./artifacts/lake` | Parquet lake |
 | `SANDBOX_BACKEND` | `auto` | `docker` when available; production refuses `local` |
 | `ENGINE_SANDBOX` | `false` | run every backtest in the sandbox; production must be `true` |

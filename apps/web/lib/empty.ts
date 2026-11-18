@@ -29,9 +29,9 @@ export const EMPTY_SETTINGS: SettingsData = {
   runtime: {},
   models: {},
   preferences: {},
-  keys: {},
   adapters: [],
-  ignored_secrets: "Keys are never returned in full. Set them in the server environment.",
+  ignored_secrets:
+    "Provider credentials are server-side only (Vercel environment variables). This app never asks for, accepts or returns a key.",
 };
 
 export const EMPTY_USAGE: UsageData = {

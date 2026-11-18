@@ -59,10 +59,8 @@ Without Docker, `local` is used (development only). Never expose the local backe
 ## Data
 
 The lake is `LAKE_ROOT` (default `./artifacts/lake`). The first backtest downloads bars through
-Yahoo/Stooq and caches Parquet. To work offline, set `ALLOW_NETWORK=false`; the loader then falls back
-to clearly labelled synthetic prices.
-
-Synthetic runs are labelled in the API, ledger, tearsheet and UI.
+Yahoo/Stooq and caches Parquet. Setting `ALLOW_NETWORK=false` disables fetches entirely; a run then
+fails with the provider error. There is no synthetic price fallback.
 
 ## Optional extras
 
@@ -117,7 +115,7 @@ npm --prefix apps/web run build
 | Symptom | Cause / fix |
 |---|---|
 | Sprint ends `failed` immediately | Read `/sprints/{id}` `error`, then `artifacts/jobs/*.log`. Usually data download or missing column. |
-| Results say `synthetic: true` | Network disabled or providers failed. Expected offline behaviour, not market evidence. |
+| `DataUnavailable` | Network disabled or every provider failed. Real data is required; no generated prices are substituted. |
 | `EngineUnavailable` | Optional adapter not installed; use the native engine or install the extra. |
 | Worker does nothing | Redis unreachable. Check `REDIS_URL`; use `JOB_RUNNER=subprocess` as a fallback. |
 | Web shows "not signed in" after login | Token missing/expired, or API proxy cannot reach `API_INTERNAL_URL`. |
